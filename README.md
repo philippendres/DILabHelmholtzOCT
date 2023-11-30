@@ -1,9 +1,11 @@
-# DILabOCT
-In this project we build a topology regularized foundation model for medical image segmentation. Here we use OCT data.
+# DILabHelmholtz
+In this project we build a topology regularized foundation model for medical image segmentation. 
+We consider two types of data: OCT and Organoid.
 
+
+## OCT
 Current Goals:
+- Improve finetuning technique
 - Build evaluation pipeline
-- Implement wrappers to other models in models
-- Build own model
 - Implement metrics
 - implement Topological Loss
