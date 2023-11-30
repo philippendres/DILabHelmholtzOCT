@@ -1,1 +1,0 @@
-Put the SAM checkpoints in here (i.e. sam_vit_b_01ec64)

@@ -12,12 +12,17 @@ from tqdm import tqdm
 from statistics import mean
 import torch
 from PIL import Image as PILImage
+from torch.utils.tensorboard import SummaryWriter
+import datetime
 
+#@enricrabasseda
 #TODO: Try other alternatives as base models
 # alternatives: ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
 base_model_name = "facebook/sam-vit-base"
 processor = SamProcessor.from_pretrained(base_model_name)
 model = SamModel.from_pretrained(base_model_name)
+writer = SummaryWriter("../../models/OCT/runs")
+
 
 def transform_image(img):
     img = img.transpose(2,1,0)
@@ -119,7 +124,7 @@ for name, param in model.named_parameters():
 mat_dme =[]
 for i in range(10):
     number = str(i+1).zfill(2)
-    mat_dme.append("..\data\Kaggle\Subject_"+number+".mat")
+    mat_dme.append("..\data\Kaggle\DME\Subject_"+number+".mat")
 
 
 #TODO: Extend Code to multiple subjects
@@ -128,8 +133,10 @@ images = loadmat(mat_dme[nr])['images']
 #TODO: Extend Code to manualFluid2
 masks = loadmat(mat_dme[nr])['manualFluid1']
 idx = get_valid_idx(masks)
-masks = masks[:,:, idx]
-images = images[:,:,idx]
+masks = masks[:,:, idx[0]]
+masks = masks[...,np.newaxis]
+images = images[:,:,idx[0]]
+images = images[:,:, np.newaxis]
 images = transform_image(images)
 #TODO: Extend Code to individual fluids (values 1,.. in the mask)
 masks = np.where(masks == 0, 0, 1).transpose(2,1,0)
@@ -155,7 +162,7 @@ axes.title.set_text(f"Ground truth mask")
 axes.axis("off")
 """
 train_dataset = SAMDataset(dataset=dataset, processor=processor)
-train_dataloader = DataLoader(train_dataset, batch_size=4, shuffle=True)
+train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True)
 # Note: Hyperparameter tuning could improve performance here
 optimizer = Adam(model.mask_decoder.parameters(), lr=1e-5, weight_decay=0)
 #TODO: Test other losses, implement topological loss
@@ -180,7 +187,7 @@ for epoch in range(num_epochs):
         predicted_masks = outputs.pred_masks.squeeze(1)
         ground_truth_masks = batch["ground_truth_mask"].float().to(device)
         loss = seg_loss(predicted_masks, ground_truth_masks.unsqueeze(1))
-
+        writer.add_scalar("Loss/train", loss, epoch)
         # backward pass (compute gradients of parameters w.r.t. loss)
         optimizer.zero_grad()
         loss.backward()
@@ -189,12 +196,15 @@ for epoch in range(num_epochs):
         optimizer.step()
         epoch_losses.append(loss.item())
 
+
     print(f'EPOCH: {epoch}')
     print(f'Mean loss: {mean(epoch_losses)}')
 
-torch.save(model.state_dict(), "../data/Kaggle/model_checkpoints/firsttry.pt")
-
-#TODO Implement comparison with SAM and MedSAM (i.e. evaluation of common metrices)
+time = datetime.datetime.noe()
+torch.save(model.state_dict(), "../models/OCT/model_checkpoints/" + time + "chkpt.pt")
+writer.flush()
+writer.close()
+#TODO Implement comparison with SAM and MedSAM_checkpoint (i.e. evaluation of common metrices)
 """
 Evaluation:
 idx = 3
@@ -251,7 +261,7 @@ axes.title.set_text(f"Predicted mask")
 axes.axis("off")
 
 
-### Compare MedSAM:
+### Compare MedSAM_checkpoint:
 processor_medsam = SamProcessor.from_pretrained("wanglab/medsam-vit-base")
 model_medsam = SamModel.from_pretrained("wanglab/medsam-vit-base").to(device)
 model_sam.eval()

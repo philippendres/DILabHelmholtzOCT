@@ -1,3 +1,6 @@
+# DOES NOT WORK
+
+
 import numpy as np
 import pickle
 from segment_anything.utils import transforms
@@ -6,7 +9,7 @@ import torch
 from segment_anything.modeling import sam
 from segment_anything import sam_model_registry
 from torch.utils.data import DataLoader
-import data_loading_kaggle
+import kaggle_amd_data_loading
 from torch.utils.data import Dataset
 from torchvision import datasets
 from torch.nn.functional import threshold, normalize
@@ -23,7 +26,7 @@ sam_model = sam_model_registry[model_type](checkpoint=sam_checkpoint)
 sam_model.to(device=device)
 
 
-full_dataset = data_loading_kaggle.CustomImageDataset(number_of_mats, number_of_shots, number_of_segmentations, longest_side, device, sam_model)
+full_dataset = kaggle_amd_data_loading.CustomImageDataset(number_of_mats, number_of_shots, number_of_segmentations, longest_side, device, sam_model)
 train_size = int(0.8 * len(full_dataset))
 test_size = len(full_dataset) - train_size
 train_dataset, test_dataset = torch.utils.data.random_split(full_dataset, [train_size, test_size])
@@ -69,4 +72,4 @@ for e in range(epochs):
             print('  batch {} loss: {}'.format(i + 1, last_loss))
             running_loss = 0.
 
-torch.save(sam_model.state_dict(), "../data/Kaggle/model_checkpoints/chkpt1.pt")
+torch.save(sam_model.state_dict(), "../../models/OCT/model_checkpoints/chkpt1.pt")

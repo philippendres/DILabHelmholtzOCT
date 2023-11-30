@@ -1,3 +1,5 @@
+#Transoforms .mat files into pickles with binary masks
+
 import numpy as np
 import pandas as pd
 import os
@@ -70,17 +72,17 @@ mat_amd, mat_dme, mat_control = [],[],[]
 """
 for i in range(10):
     number = str(i+1).zfill(2)
-    mat_dme.append("..\data\Kaggle\Subject_"+number+".mat")
+    mat_dme.append("..\data\Kaggle\AMD\Subject_"+number+".mat")
 
 for i in range(10):
     number = str(i+1).zfill(3)
-    mat_control.append("..\data\Kaggle\Farsiu_Ophthalmology_2013_Control_Subject_1"+number+".mat")
+    mat_control.append("..\data\Kaggle\AMD\Farsiu_Ophthalmology_2013_Control_Subject_1"+number+".mat")
 """
 for i in range(10):
     number = str(i+1).zfill(3)
-    mat_amd.append("..\data\Kaggle\Farsiu_Ophthalmology_2013_AMD_Subject_1"+number+".mat")
+    mat_amd.append("..\data\Kaggle\AMD\Farsiu_Ophthalmology_2013_AMD_Subject_1"+number+".mat")
     processed_dict = process_amd(mat_amd[i])
-    save_preprocessed_dict(processed_dict, "..\data\Kaggle\preprocessed\\amd_"+number)
+    save_preprocessed_dict(processed_dict, "..\data\Kaggle\AMD\preprocessed\\amd_"+number)
 
 
 

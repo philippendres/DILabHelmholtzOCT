@@ -1,3 +1,5 @@
+# Implements a CustomDataset for Kaggle AMD data
+
 import os
 import pandas as pd
 import torch
@@ -28,7 +30,7 @@ class CustomImageDataset(Dataset):
         shot = (idx - mat*(self.number_of_shots*self.number_of_segmentations)) //self.number_of_segmentations
         segmentation_number = (idx- mat*(self.number_of_shots*self.number_of_segmentations)) % self.number_of_segmentations
         number = str(mat+1).zfill(3)
-        with open("..\data\Kaggle\preprocessed\\amd_"+number+".pkl", 'rb') as file:
+        with open("..\data\Kaggle\AMD\preprocessed\\amd_"+number+".pkl", 'rb') as file:
             dict = pickle.load(file)
         image = dict['images'][shot]['image']
         image_RBG_uint8 = transform_image(image)
