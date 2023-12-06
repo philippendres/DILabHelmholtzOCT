@@ -21,7 +21,7 @@ import datetime
 # 2. Execute kaggle_dme_finetuning (after adjusting the paramters, like the data paths)
 # Also: log into W&B for logging, or change the appearances of wandb
 
-time = datetime.datetime.now().strftime('%y-%m-%d %H:%M:%S')
+time = datetime.datetime.now().strftime('%y-%m-%d %H.%M.%S')
 from kaggle_dme_utils import training
 
 # Configure W&B parameters
@@ -37,7 +37,7 @@ checkpoint_path = "../../models/OCT/model_checkpoints/" +time
 display_name = base_model + " " + time
 config = {
     "learning_rate": 1e-5,
-    "epochs": 20,
+    "epochs": 10,
     "batch_size": 8,
     "data_path": data_path,
     "dataset": data_path + preprocessed_dataset,

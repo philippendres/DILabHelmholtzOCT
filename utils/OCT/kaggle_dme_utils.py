@@ -58,8 +58,9 @@ def training(base_model, config):
             # optimize
             optimizer.step()
             train_epoch_loss += train_loss.item()
-        wandb.log({"train_loss": train_epoch_loss})
-        valid_epoch_loss = validate_model(model, valid_dataloader, seg_loss)
+        wandb.log({"train/train_loss": train_epoch_loss,
+                   "train/epoch": epoch})
+        valid_epoch_loss = validate_model(model, valid_dataloader, seg_loss, epoch)
 
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
     torch.save(model.state_dict(), config["checkpoint"] + "chkpt.pt")
@@ -97,7 +98,7 @@ def validate_model(model, valid_dl, seg_loss, log_images=False, batch_idx=0):
             valid_loss = seg_loss(predicted_masks, ground_truth_masks.unsqueeze(1))
             # backward pass (compute gradients of parameters w.r.t. loss)
             valid_epoch_loss += valid_loss.item()
-        wandb.log({"valid_loss": valid_epoch_loss})
+        wandb.log({"val/valid_loss": valid_epoch_loss})
     return valid_epoch_loss
 
 
@@ -126,6 +127,7 @@ def show_mask(mask, ax, random_color=False):
     ax.imshow(mask_image)
 
 def get_bounding_box(ground_truth_map):
+    """
     # get bounding box from mask
     y_indices, x_indices = np.where(ground_truth_map > 0)
     x_min, x_max = np.min(x_indices), np.max(x_indices)
@@ -137,6 +139,8 @@ def get_bounding_box(ground_truth_map):
     y_min = max(0, y_min)
     y_max = min(H, y_max)
     bbox = [x_min, y_min, x_max, y_max]
+    """
+    bbox =[0,0,255,255]
     return bbox
 
 class SAMDataset(TorchDataset):
