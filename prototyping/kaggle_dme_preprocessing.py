@@ -1,3 +1,4 @@
+# Deprecated. See src/octsam/data/preprocessing
 from scipy.io import loadmat
 import numpy as np
 from transformers import SamProcessor, SamModel
@@ -7,15 +8,15 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torch.utils.data import DataLoader as TorchDataset
 from torch.optim import Adam
-import monai
 from tqdm import tqdm
 from statistics import mean
 import torch
 from PIL import Image as PILImage
-from torch.utils.tensorboard import SummaryWriter
 import datetime
 
 def preprocess(data_path, preprocessing_folder, small):
+    norm = plt.Normalize(vmin=0, vmax=255)
+    cm = plt.cm.hsv
     time = datetime.datetime.now().strftime('%y-%m-%d %H.%M.%S')
     images = []
     masks =[]
@@ -53,7 +54,7 @@ def preprocess(data_path, preprocessing_folder, small):
     dataset = create_dataset(images=images, labels=masks)
     #TODO: Explore Options for transformations
     #dataset.set_transform(transforms)
-    split = dataset.train_test_split(test_size=0.2)
+    split = dataset.train_test_split(test_size=0.2, shuffle=False)
     split.save_to_disk(preprocessing_folder + time)
 
 
@@ -79,6 +80,6 @@ def create_dataset(images, labels):
     return dataset
 
 small = True
-data_path = "../../data/OCT/Kaggle/DME/"
+data_path = "/vol/data/2015_BOE_Chiu/"
 preprocessing_folder = data_path + "preprocessed/"
 preprocess(data_path, preprocessing_folder, small)

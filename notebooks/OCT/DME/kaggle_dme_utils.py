@@ -26,12 +26,12 @@ def training(base_model, config):
             param.requires_grad_(False)
     train_dataset = datasets.load_from_disk(config["dataset"])["train"]
     train_dataset.set_transform(transforms)
-    train_dataset = SAMDataset(dataset=train_dataset, processor=processor)
-    train_dataloader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True)
+    train_sam_dataset = SAMDataset(dataset=train_dataset, processor=processor)
+    train_dataloader = DataLoader(train_sam_dataset, batch_size=config["batch_size"], shuffle=True)
     valid_dataset = datasets.load_from_disk(config["dataset"])["test"]
     valid_dataset.set_transform(transforms)
-    valid_dataset = SAMDataset(dataset=valid_dataset, processor=processor)
-    valid_dataloader = DataLoader(valid_dataset, batch_size=config["batch_size"], shuffle=True)
+    valid_sam_dataset = SAMDataset(dataset=valid_dataset, processor=processor)
+    valid_dataloader = DataLoader(valid_sam_dataset, batch_size=config["batch_size"], shuffle=True)
     # Note: Hyperparameter tuning could improve performance here
     optimizer = Adam(model.mask_decoder.parameters(), lr=config["learning_rate"], weight_decay=0)
     #TODO: Test other losses, implement topological loss
@@ -39,6 +39,28 @@ def training(base_model, config):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
+    idx = 7
+    train_image = train_dataset[idx]["pixel_values"]
+    valid_image = valid_dataset[idx]["pixel_values"]
+    train_gt = np.array(train_dataset[idx]["label"])
+    valid_gt = np.array(valid_dataset[idx]["label"])
+    prompt = [0,0,254,254]
+    class_labels = {1: "segmentation"}
+    with torch.no_grad():
+        inputs = processor(train_image, input_boxes=[[prompt]], return_tensors="pt").to("cuda")
+        model.eval()
+        outputs = model(**inputs, multimask_output=False)
+        medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
+        medsam_seg_prob = medsam_seg_prob.cpu().numpy().squeeze()
+        medsam_seg = (medsam_seg_prob > 0.5).astype(np.uint8)
+        mask_img = wandb.Image(
+            train_image,
+            masks={
+                "predictions": {"mask_data": medsam_seg, "class_labels": class_labels},
+                "ground_truth": {"mask_data": train_gt, "class_labels": class_labels},
+            },
+        )
+        wandb.log({"predictions" :[mask_img]})
     for epoch in range(config["epochs"]):
         model.train()
         train_epoch_loss = 0
@@ -63,6 +85,21 @@ def training(base_model, config):
         valid_epoch_loss = validate_model(model, valid_dataloader, seg_loss, epoch)
 
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
+        with torch.no_grad():
+            inputs = processor(train_image, input_boxes=[[prompt]], return_tensors="pt").to("cuda")
+            model.eval()
+            outputs = model(**inputs, multimask_output=False)
+            medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
+            medsam_seg_prob = medsam_seg_prob.cpu().numpy().squeeze()
+            medsam_seg = (medsam_seg_prob > 0.5).astype(np.uint8)
+            mask_img = wandb.Image(
+                train_image,
+                masks={
+                    "predictions": {"mask_data": medsam_seg, "class_labels": class_labels},
+                    "ground_truth": {"mask_data": train_gt, "class_labels": class_labels},
+                },
+            )
+            wandb.log({"predictions" :[mask_img]})
     torch.save(model.state_dict(), config["checkpoint"] + "chkpt.pt")
     wandb.finish()
 

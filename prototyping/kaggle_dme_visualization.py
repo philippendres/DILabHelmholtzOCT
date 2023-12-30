@@ -13,10 +13,10 @@ def show_box(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))
 
 base_models = ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
-base_model = base_models[0]
-data_path = "../../data/OCT/Kaggle/DME/preprocessed/"
-preprocessed_dataset = "23-12-04 20.54.30"
-checkpoint_path = "../../models/OCT/model_checkpoints/23-12-06 13.22.42chkpt.pt"
+base_model = base_models[3]
+data_path = "/vol/data/2015_BOE_Chiu/preprocessed/"
+preprocessed_dataset = "23-12-11 10.02.28"
+checkpoint_path = "/vol/data/models/OCT/model_checkpoints/23-12-11 14.37.21chkpt.pt"
 
 
 train_dataset = datasets.load_from_disk(data_path + preprocessed_dataset)["train"]
@@ -26,15 +26,18 @@ valid_dataset = datasets.load_from_disk(data_path + preprocessed_dataset)["test"
 valid_dataset.set_transform(transforms)
 
 # let's take a random training example
-idx = 1
+idx = 7
 
 # load image
 train_image = train_dataset[idx]["pixel_values"]
 valid_image = valid_dataset[idx]["pixel_values"]
 
-image = valid_image
+image = train_image
+dataset = train_dataset
+
+
 # get box prompt based on ground truth segmentation map
-ground_truth_mask = np.array(valid_dataset[idx]["label"])
+ground_truth_mask = np.array(dataset[idx]["label"])
 prompt = get_bounding_box(ground_truth_mask)
 prompt = [0,0,254,254]
 
@@ -44,8 +47,8 @@ processor = SamProcessor.from_pretrained(model_name)
 model = SamModel.from_pretrained(model_name)
 model.to("cuda")
 
-#states = torch.load(checkpoint_path)
-#model.load_state_dict(states, strict=False)
+states = torch.load(checkpoint_path)
+model.load_state_dict(states, strict=False)
 
 inputs = processor(image, input_boxes=[[prompt]], return_tensors="pt").to("cuda")
 model.eval()
@@ -56,16 +59,18 @@ with torch.no_grad():
 medsam_seg_prob = torch.sigmoid(outputs.pred_masks.squeeze(1))
 # convert soft mask to hard mask
 medsam_seg_prob = medsam_seg_prob.cpu().numpy().squeeze()
+print(medsam_seg_prob)
 medsam_seg = (medsam_seg_prob > 0.5).astype(np.uint8)
-"""
+
 plt.ion()
 fig, axes = plt.subplots()
 
 axes.imshow(np.array(image))
-#show_mask(medsam_seg, axes)
-show_mask(medsam_seg, axes)
-axes.title.set_text(f"Predicted mask MedSAM")
-#axes.title.set_text(f"Ground Truth")
+#show_mask(ground_truth_mask , axes)
+show_mask(medsam_seg, axes, True)
+
+#axes.title.set_text(f"Predicted mask Fine-tuned SAM")
+axes.title.set_text(f"Ground Truth")
 #axes.title.set_text(f"Raw")
 #show_box(prompt, axes)
 axes.axis("off")
@@ -81,3 +86,4 @@ metric = metric.compute(
     reduce_labels=False,
 )
 print(metric)
+"""
