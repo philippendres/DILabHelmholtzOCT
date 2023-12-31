@@ -20,7 +20,7 @@ def training(base_model, config):
     valid_dataset, valid_dataloader = prepare_data(processor, config["dataset"], "test", config)
     optimizer = Adam(model.mask_decoder.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     #TODO: Test other losses, implement topological loss
-    seg_loss = monai.losses.DiceCELoss(include_background = True, sigmoid=True, squared_pred=True, reduction='mean')
+    seg_loss = monai.losses.DiceCELoss(softmax=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     config["display_samples"] != "no" and display_samples(model, processor, device, train_dataset, "train", config)
@@ -41,26 +41,18 @@ def training(base_model, config):
                 inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
             #postprocessing
-            interpolated_mask = F.interpolate(outputs.pred_masks[0], (1024,1024), mode="bilinear", align_corners=False)
-            interpolated_mask = interpolated_mask[..., : 992, : 1024]
-            interpolated_mask = F.interpolate(interpolated_mask, (496,512), mode="bilinear", align_corners=False)
-            masks = interpolated_mask
-            #masks = processor.post_process_masks(outputs.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])
+            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : 992, : 1024]
+            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
             # compute loss
             train_loss = 0
-            
-            for i, m in enumerate(mask_values.squeeze()):
-                total_mask_count = torch.sum(mask_counts.squeeze()[i])
-                #total_class_count = torch.sum(torch.where(m>0,1.0,0.0))
-                #print(1/total_mask_count * seg_loss(masks[i].squeeze(), gt_masks.squeeze()[i]))
-                train_loss += 1/total_mask_count * seg_loss(masks[i].squeeze(), gt_masks.squeeze()[i])
-            # backward pass (compute gradients of parameters w.r.t. loss)
-            
+            batched_mask_count = torch.sum(mask_counts, dim=0)
+            train_loss = seg_loss(masks, gt_masks)
+            # backward pass (compute gradients of parameters w.r.t. loss
             train_loss.backward()
             # optimize
             optimizer.step()
             train_epoch_loss += train_loss.item()
-            break
         wandb.log({"train/train_loss": train_epoch_loss, "train/epoch": epoch})
         valid_epoch_loss = validate_model(model, processor, valid_dataloader, seg_loss, config)
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
@@ -105,30 +97,19 @@ def display_samples(model, processor, device, dataset, split, config):
         image, bboxes, gt_masks, mask_values, mask_counts = dataset[i]
         class_labels = config["mask_dict"]
         with torch.no_grad():
-            
             inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
             outputs = model(**inputs.to(device), multimask_output=False)
-            masks = processor.post_process_masks(outputs.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])
-            if config["display_mode"] == "single_masks":
-                image_masks = {}
-                for i, m in enumerate(mask_values):
-                    image_masks.update({
-                        config["mask_dict"][m] + "_" + "pred": {"mask_data": masks[0][i,:,:,:].squeeze().cpu().float().numpy(), "class_labels": {0: "background", 1: class_labels[m]}},
-                        config["mask_dict"][m] + "_" + "gt": {"mask_data": 2*gt_masks[i], "class_labels": {0: "background", 2: class_labels[m]}},
-                    })
-            elif config["display_mode"] == "all_masks":
-                mask, gt = np.zeros_like(gt_masks[0]), np.zeros_like(gt_masks[0])
-                enumerated_values = [(i, mask_values[i], mask_counts[i]) for i in range(len(mask_values))]
-                enumerated_values.sort(key=lambda a: a[2], reverse=True)
-                for m in enumerated_values:
-                    gt += m[1] * gt_masks[m[0]]
-                    boolean_mask = masks[0][m[0],:,:,:].squeeze().cpu()
-                    mask[boolean_mask] = m[1]*masks[0][m[0],:,:,:].squeeze().cpu().float()[boolean_mask]
-                image_masks = {
-                    "pred": {"mask_data": mask, "class_labels": class_labels},
-                    # class_labels could be modified to show the difference better
-                    "gt": {"mask_data": gt, "class_labels": class_labels}
-                }
+            masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : 992, : 1024]
+            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
+            masks = torch.argmax(masks, dim=1).squeeze()
+            gt_masks = torch.tensor(np.array(gt_masks))
+            gt_masks = torch.argmax(gt_masks, dim=0)
+            image_masks = {
+                "pred": {"mask_data": masks.cpu().numpy(), "class_labels": class_labels},
+                # class_labels could be modified to show the difference better
+                "gt": {"mask_data": gt_masks.numpy(), "class_labels": class_labels}
+            }
             img.append(wandb.Image(
                 image,
                 masks=image_masks,
@@ -152,16 +133,16 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
             gt_masks = gt_masks.to(device)
             inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
-            masks = processor.post_process_masks(outputs.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])
+            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : 992, : 1024]
+            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
             # compute loss
             train_loss = 0
             
-            for i, m in enumerate(mask_values.squeeze()):
-                total_mask_count = torch.sum(mask_counts.squeeze()[i])
-                total_class_count = torch.sum(torch.where(m>0,1.0,0.0))
-                train_loss += 1/total_mask_count * seg_loss(masks[0].squeeze()[i].float(), gt_masks.squeeze()[i])
+            batched_mask_count = torch.sum(mask_counts, dim=0)
+            for i, m in enumerate(mask_values[0]):
+                train_loss += 1/batched_mask_count[i] * seg_loss(masks[:,i,:,:], gt_masks[:,i,:,:])
             epoch_loss += train_loss
-            break
         wandb.log({"val/valid_loss": epoch_loss})
     return epoch_loss
 
@@ -177,7 +158,8 @@ class SAMDataset(TorchDataset):
         # get bounding boxes from mask
         bboxes, gt_masks = [],[]
         mask_values, mask_counts = np.unique(ground_truth_mask, return_counts=True)
-        mask_values, mask_counts = mask_values[1:], mask_counts[1:]
+        #Comment for background prediction
+        #mask_values, mask_counts = mask_values[1:], mask_counts[1:]
         for v in mask_values: 
             x_indices, y_indices = np.where(ground_truth_mask == v)
             x_min, x_max = np.min(x_indices), np.max(x_indices)
