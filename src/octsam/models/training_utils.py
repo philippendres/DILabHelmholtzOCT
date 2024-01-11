@@ -13,6 +13,9 @@ from statistics import mean
 import torch
 from torch.nn.utils.rnn import pad_sequence 
 import torch.nn.functional as F
+import cv2
+import random
+import time
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
@@ -23,8 +26,8 @@ def training(base_model, config):
     seg_loss = monai.losses.DiceCELoss(softmax=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
-    config["display_samples"] != "no" and display_samples(model, processor, device, train_dataset, "train", config)
-    config["display_samples"] != "no" and display_samples(model, processor, device, valid_dataset, "valid", config)
+    config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
+    config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
     for epoch in range(config["epochs"]):
         model.train()
         train_epoch_loss = 0
@@ -40,6 +43,7 @@ def training(base_model, config):
                 optimizer.zero_grad()
                 inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
+             
             #postprocessing
             masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
@@ -56,8 +60,8 @@ def training(base_model, config):
         wandb.log({"train/train_loss": train_epoch_loss, "train/epoch": epoch})
         valid_epoch_loss = validate_model(model, processor, valid_dataloader, seg_loss, config)
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
-        config["display_samples"] != "no" and display_samples(model, processor, device, train_dataset, "train", config)
-        config["display_samples"] != "no" and display_samples(model, processor, device, valid_dataset, "valid", config)
+        config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
+        config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
     torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
     wandb.finish()
 
@@ -73,7 +77,7 @@ def prepare_model(base_model):
 def prepare_data(processor, dataset, split, config):
     dataset = datasets.load_from_disk(dataset)[split]
     config["data_transforms"] and dataset.set_transform(data_transforms(operations=config["data_transforms"]))
-    dataset = SAMDataset(dataset=dataset, processor=processor)
+    dataset = SAMDataset(dataset=dataset, processor=processor, config=config)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=config["shuffle"], collate_fn=custom_collate)
     return dataset, dataloader
 
@@ -91,7 +95,17 @@ def data_transforms(batch, operations):
 
 def display_samples(model, processor, device, dataset, split, config):
     model.eval()
-    idx = select_display_indices(dataset, config)
+    if config["display_mode"] == "predefined":
+        idx = config["display_idx"]
+    elif config["display_mode"] != "none":
+        if config["display_mode"] == "random_equal":
+            random.seed(17)
+        elif config["display_mode"] == "random_changing":
+            random.seed(time.time())
+        if split == "train":
+            idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_train_nr"])]
+        else:
+            idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_val_nr"])]
     img = []
     for i in idx:
         image, bboxes, gt_masks, mask_values, mask_counts = dataset[i]
@@ -118,9 +132,6 @@ def display_samples(model, processor, device, dataset, split, config):
         wandb.log({split+"_samples" :img})
     model.train()
 
-def select_display_indices(dataset, config):
-    return [1]
-
 def validate_model(model, processor, valid_dl, seg_loss, config, log_images=False, batch_idx=0):
     "Compute performance of the model on the validation dataset and log a wandb.Table"
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -137,19 +148,16 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
             masks = masks[..., : 992, : 1024]
             masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
             # compute loss
-            train_loss = 0
-            
-            batched_mask_count = torch.sum(mask_counts, dim=0)
-            for i, m in enumerate(mask_values[0]):
-                train_loss += 1/batched_mask_count[i] * seg_loss(masks[:,i,:,:], gt_masks[:,i,:,:])
+            train_loss = seg_loss(masks, gt_masks)
             epoch_loss += train_loss
         wandb.log({"val/valid_loss": epoch_loss})
     return epoch_loss
 
 class SAMDataset(TorchDataset):
-    def __init__(self, dataset, processor):
+    def __init__(self, dataset, processor, config):
         self.dataset = dataset
         self.processor = processor
+        self.config = config
 
     def __len__(self):
         return len(self.dataset)
@@ -179,6 +187,8 @@ class SAMDataset(TorchDataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image = np.array(item["image"])
+        if (self.config["pseudocolor"] != None):
+            image = cv2.applyColorMap(image[:, :, 0], self.config["pseudocolor"])
         ground_truth_mask = np.array(item["label"])
         # get bounding box prompt
         bboxes, gt_masks, mask_values, mask_counts = self.get_bboxes_and_gt_masks(ground_truth_mask)

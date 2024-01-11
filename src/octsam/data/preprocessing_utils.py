@@ -20,9 +20,10 @@ def preprocess(dataset, raw_data_path, processed_data_path, preprocessing_config
     split = dataset.train_test_split(test_size=preprocessing_config["test_size"], shuffle=preprocessing_config["shuffle"])
     preprocessing_config["print_status"] and print("Created dataset. Now writing to disk")
 
-    save_directory = os.path.join(processed_data_path, preprocessing_config["additional_file_description"] + "preprocessed_at_" + preprocessing_config["time"])
+    dataset_name = preprocessing_config["additional_file_description"] + "preprocessed_at_" + preprocessing_config["time"]
+    save_directory = os.path.join(processed_data_path, dataset_name)
     split.save_to_disk(save_directory)
-    preprocessing_config["print_status"] and print("Finished")
+    preprocessing_config["print_status"] and print(f"Finished. Dataset name is {dataset_name}")
 
 
 def preprocess_dme(raw_data_path, preprocessing_config):
@@ -71,7 +72,7 @@ def preprocess_custom(raw_data_path, preprocessing_config):
         filename = os.fsdecode(file)
         image = cv2.imread(os.path.join(raw_data_path, "imagesgreyscale", filename))
         mask = cv2.imread(os.path.join(raw_data_path, "masks14", filename))
-        #print(image.shape)
+        # print(image.shape)
         if mask.shape != (496,512,3) or image.shape != (496,512,3):
             if preprocessing_config["print_status"]:
                 print("Skipped image of different size!")
