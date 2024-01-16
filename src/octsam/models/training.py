@@ -11,71 +11,126 @@ import os
 import wandb
 import datetime
 from training_utils import training
+import argparse
+import cv2
 
 torch.cuda.empty_cache()
 time = datetime.datetime.now().strftime('%y-%m-%d_%H.%M.%S')
 
-# Configure W&B parameters
-project_name = "OCT_segmentation"
-entity = "dilab-helmholtz"
-# Choose base_model
-base_models = ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
-base_model = base_models[0]
-# Choose dataset
-datasets = ["custom", "dme", "amd"]
-dataset = datasets[0]
-data_directory = "/vol/data"
-processed_dataset = "default_preprocessed_at_23-12-22_16.11.35"
-data_path = os.path.join(data_directory, "datasets", "processed", dataset, processed_dataset)
-model_path = os.path.join(data_directory, "models", dataset)
+parser = argparse.ArgumentParser()
+
+# W&B parameters
+parser.add_argument("--project_name", type=str, default="OCT_segmentation")
+parser.add_argument("--entity", type=str, default="dilab-helmholtz")
+
+# Model Info
+# base_models = ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
+parser.add_argument("--base_model", type=str, default="facebook/sam-vit-base")
+parser.add_argument("--loss", type=str, default="diceCE")
+
+# Dataset type and location
+# datasets = ["custom", "dme", "amd"]
+parser.add_argument("--dataset", type=str, default="custom")
+parser.add_argument("--data_directory", type=str, default="/vol/data")
+parser.add_argument("--dataset_name", type=str, default="default_preprocessed_at_23-12-22_16.11.35")
+
+#Training parameters
+parser.add_argument("--lr", type=float, default=1e-3)
+parser.add_argument("--weight_decay", type=float, default=0)
+parser.add_argument("--epochs", type=int, default=10)
+parser.add_argument("--bs", type=int, default=8)
+parser.add_argument("--shuffle", type=bool, default=False)
+parser.add_argument("--optimizer", type=str, default="adam")
+
+
+# Misc arguments
+# display_options = ["none", "predefined", "random_equal", "random_changing"]
+# display_idx - comma-separated indexes (no spaces)
+parser.add_argument("--display_mode", type=str, default="predefined")
+parser.add_argument("--display_idx", type=str, default="0")
+parser.add_argument("--display_val_nr", type=int, default=1)
+parser.add_argument("--display_train_nr", type=int, default=1)
+
+modes = ["single_mask", "all_masks_one_model", "all_masks_seperate_models" ]
+parser.add_argument("--mode", type=int, default=1)
+parser.add_argument("--seg_nr", type=int, default=3)
+
+OCV_COLORMAPS = {
+    "Autumn": cv2.COLORMAP_AUTUMN, 
+    "Bone": cv2.COLORMAP_BONE,
+    "Cividis": cv2.COLORMAP_CIVIDIS, 
+    "Cool": cv2.COLORMAP_COOL, 
+    "Deepgreen": cv2.COLORMAP_DEEPGREEN,
+    "Hot": cv2.COLORMAP_HOT,
+    "HSV": cv2.COLORMAP_HSV,
+    "Inferno": cv2.COLORMAP_INFERNO,
+    "Jet": cv2.COLORMAP_JET,
+    "Magma": cv2.COLORMAP_MAGMA,
+    "Ocean": cv2.COLORMAP_OCEAN,
+    "Parula": cv2.COLORMAP_PARULA,
+    "Pink": cv2.COLORMAP_PINK,
+    "Plasma": cv2.COLORMAP_PLASMA,
+    "Rainbow": cv2.COLORMAP_RAINBOW,
+    "Viridis": cv2.COLORMAP_VIRIDIS,
+    "Winter": cv2.COLORMAP_WINTER,
+    "Spring": cv2.COLORMAP_SPRING,
+    "Summer": cv2.COLORMAP_SUMMER,
+    "Twilight shifted": cv2.COLORMAP_TWILIGHT_SHIFTED,
+    "Twilight": cv2.COLORMAP_TWILIGHT,
+    "Turbo": cv2.COLORMAP_TURBO,
+    "grayscale": None
+}
+parser.add_argument("--pseudocolor", type=str, default="grayscale")
+
+parser.add_argument("--display_prefix", type=str, default="")
+
+args = parser.parse_args()
+
+
+data_path = os.path.join(args.data_directory, "datasets", "processed", args.dataset, args.dataset_name)
+model_path = os.path.join(args.data_directory, "models", args.dataset)
+
 # Choose display_name
-display_name = ""
-# Choose loss
-losses = ["diceCE"]
-loss = losses[0]
+display_name = args.display_prefix + f"{'{:.0e}'.format(args.lr)} lr,{'{:.0e}'.format(args.weight_decay)} wd,{args.bs} bs, {args.loss} loss, {args.pseudocolor}, {time}"
    
 
 
 config = {
     "display_name": display_name,
-    "base_model": base_model,
+    "base_model": args.base_model,
     "dataset": data_path,
     "checkpoint": model_path,
-    "learning_rate": 1e-3,
-    "weight_decay": 0,
-    "epochs": 10,
-    "batch_size": 8,
-    "shuffle": False,
+    "learning_rate": args.lr,
+    "weight_decay": args.weight_decay,
+    "epochs": args.epochs,
+    "batch_size": args.bs,
+    "shuffle": args.shuffle,
     "data_transforms": [],
-    "optimizer": "adam",
-    "loss": loss,
+    "optimizer": args.optimizer,
+    "loss": args.loss,
     "time": time,
+    "mode": modes[args.mode],
+    "display_mode": args.display_mode, 
+    "pseudocolor": OCV_COLORMAPS[args.pseudocolor],
 }
 
 # Choose the mode for display_samples
-display_options = ["no", "predefined images", "random_equal_images", "random_changing_images"]
-display_option = 3
-config["display_samples"] = display_options[display_option]
-if display_option == 1:
-    config["train_samples"] = [1]
-    config["valid_samples"] = [1]
-elif display_option > 1:
-    config["nr_of_train_samples"] = 3
-    config["nr_of_valid_samples"] = 2
+if args.display_mode == "predefined":
+    config["display_idx"] = list(map(int, args.display_idx.strip().split(",")))
+elif args.display_mode != "none":
+    config["display_val_nr"] = args.display_val_nr
+    config["display_train_nr"] = args.display_train_nr
+
+# TODO: Move to argparse?
 display_modes = ["single_masks", "all_masks"]
 config["display_mode"] = display_modes[1]
 
-# Choose segmentation mode
-modes = ["single_mask", "all_masks_one_model", "all_masks_seperate_models" ]
-mode = 1
-config["mode"] = modes[1]
-
 # Select mask
-if mode == modes[0]:
-    config["seg_nr"] = 1
+if args.mode == 0:
+    config["seg_nr"] = args.seg_nr
 
 # Provide dataset specific info
-if dataset == "custom":
+if args.dataset == "custom":
     mask_dict = (
         "background",
         "epiretinal membrane",
@@ -93,7 +148,7 @@ if dataset == "custom":
         "image padding" 
     )
     
-elif dataset == "dme":
+elif args.dataset == "dme":
     pass
 
 mask_dict = {k: v for k, v in enumerate(mask_dict)}
@@ -101,17 +156,13 @@ config.update({
     "mask_dict": mask_dict,
 })
 
-if display_name == "":
-    config[display_name] = config["mode"] + "_" + dataset
-
-
 wandb.init(
-    project=project_name,
-    entity=entity,
+    project=args.project_name,
+    entity=args.entity,
     name=display_name,
     config=config,
     save_code=True,
     dir = "/vol/data/runs",
 )
 
-training(base_model, config)
+training(args.base_model, config)
