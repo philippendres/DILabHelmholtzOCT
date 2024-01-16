@@ -43,15 +43,13 @@ config = {
     "checkpoint": model_path,
     "learning_rate": 1e-3,
     "weight_decay": 0,
-    "epochs": 20,
+    "epochs": 10,
     "batch_size": 8,
     "shuffle": False,
     "data_transforms": [],
     "optimizer": "adam",
     "loss": loss,
     "time": time,
-    "topological":False,
-    "nr_of_decoders": 14
 }
 
 # Choose the mode for display_samples
