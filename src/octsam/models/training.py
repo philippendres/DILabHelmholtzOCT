@@ -38,7 +38,7 @@ parser.add_argument("--dataset_name", type=str, default="default_preprocessed_at
 parser.add_argument("--lr", type=float, default=1e-3)
 parser.add_argument("--weight_decay", type=float, default=0)
 parser.add_argument("--epochs", type=int, default=10)
-parser.add_argument("--bs", type=int, default=8)
+parser.add_argument("--bs", type=int, default=16)
 parser.add_argument("--shuffle", type=bool, default=False)
 parser.add_argument("--optimizer", type=str, default="adam")
 
@@ -46,10 +46,10 @@ parser.add_argument("--optimizer", type=str, default="adam")
 # Misc arguments
 # display_options = ["none", "predefined", "random_equal", "random_changing"]
 # display_idx - comma-separated indexes (no spaces)
-parser.add_argument("--display_mode", type=str, default="predefined")
+parser.add_argument("--display_mode", type=str, default="random_changing")
 parser.add_argument("--display_idx", type=str, default="0")
-parser.add_argument("--display_val_nr", type=int, default=1)
-parser.add_argument("--display_train_nr", type=int, default=1)
+parser.add_argument("--display_val_nr", type=int, default=2)
+parser.add_argument("--display_train_nr", type=int, default=2)
 
 modes = ["single_mask", "all_masks_one_model", "all_masks_seperate_models" ]
 parser.add_argument("--mode", type=int, default=1)
@@ -123,7 +123,7 @@ elif args.display_mode != "none":
 
 # TODO: Move to argparse?
 display_modes = ["single_masks", "all_masks"]
-config["display_mode"] = display_modes[1]
+#config["display_mode"] = display_modes[1]
 
 # Select mask
 if args.mode == 0:
