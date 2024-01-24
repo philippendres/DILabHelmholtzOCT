@@ -16,6 +16,7 @@ import torch.nn.functional as F
 import cv2
 import random
 import time
+import evaluate
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
@@ -57,13 +58,44 @@ def training(base_model, config):
             # optimize
             optimizer.step()
             train_epoch_loss += train_loss.item()
+        train_epoch_loss /= len(train_dataloader)
         wandb.log({"train/train_loss": train_epoch_loss, "train/epoch": epoch})
         valid_epoch_loss = validate_model(model, processor, valid_dataloader, seg_loss, config)
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
         config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
     torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
+    if config["evaluate"]:
+        evaluate_metrics(model, processor, valid_dataset, config)
     wandb.finish()
+    
+def evaluate_metrics(model, processor, dataset, config):
+    "Evaluate model with mean iou metric"
+    metric = evaluate.load("mean_iou")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.eval()
+    segmentations = []
+    ground_truths = []
+    for d in dataset:
+        image, bboxes, gt_masks, mask_values, mask_counts = d
+        gt_masks = torch.tensor(gt_masks)
+        with torch.no_grad():
+            gt_masks = gt_masks.to(device)
+            inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
+            outputs = model(**inputs, multimask_output=False)
+            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : 992, : 1024]
+            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
+        segmentations.append(masks)
+        ground_truths.append(gt_masks)
+    metric = metric.compute(
+        predictions=[ segmentations ],
+        references=[ ground_truths ],
+        num_labels=14,
+        reduce_labels=False,
+    )
+    print(metric)
+        
 
 def prepare_model(base_model):
     processor = SamProcessor.from_pretrained(base_model)
@@ -150,6 +182,7 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
             # compute loss
             train_loss = seg_loss(masks, gt_masks)
             epoch_loss += train_loss
+        epoch_loss /= len(valid_dl)
         wandb.log({"val/valid_loss": epoch_loss})
     return epoch_loss
 

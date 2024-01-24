@@ -20,7 +20,7 @@ time = datetime.datetime.now().strftime('%y-%m-%d_%H.%M.%S')
 parser = argparse.ArgumentParser()
 
 # W&B parameters
-parser.add_argument("--project_name", type=str, default="OCT_segmentation")
+parser.add_argument("--project_name", type=str, default="OCT-Mikhail-experiments")
 parser.add_argument("--entity", type=str, default="dilab-helmholtz")
 
 # Model Info
@@ -82,7 +82,9 @@ OCV_COLORMAPS = {
 }
 parser.add_argument("--pseudocolor", type=str, default="grayscale")
 
-parser.add_argument("--display_prefix", type=str, default="")
+parser.add_argument("--display_name", type=str, default="")
+
+parser.add_argument("--evaluate", type=bool, default=True)
 
 args = parser.parse_args()
 
@@ -91,7 +93,10 @@ data_path = os.path.join(args.data_directory, "datasets", "processed", args.data
 model_path = os.path.join(args.data_directory, "models", args.dataset)
 
 # Choose display_name
-display_name = args.display_prefix + f"{'{:.0e}'.format(args.lr)} lr,{'{:.0e}'.format(args.weight_decay)} wd,{args.bs} bs, {args.loss} loss, {args.pseudocolor}, {time}"
+if args.display_name == "":
+    display_name = f"{'{:.0e}'.format(args.lr)} lr,{'{:.0e}'.format(args.weight_decay)} wd,{args.bs} bs, {args.loss} loss, {args.pseudocolor}, {time}"
+else:
+    display_name = args.display_name
    
 
 
@@ -112,6 +117,7 @@ config = {
     "mode": modes[args.mode],
     "display_mode": args.display_mode, 
     "pseudocolor": OCV_COLORMAPS[args.pseudocolor],
+    "evaluate": args.evaluate
 }
 
 # Choose the mode for display_samples
@@ -120,10 +126,6 @@ if args.display_mode == "predefined":
 elif args.display_mode != "none":
     config["display_val_nr"] = args.display_val_nr
     config["display_train_nr"] = args.display_train_nr
-
-# TODO: Move to argparse?
-display_modes = ["single_masks", "all_masks"]
-config["display_mode"] = display_modes[1]
 
 # Select mask
 if args.mode == 0:
