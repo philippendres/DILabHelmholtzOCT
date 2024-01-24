@@ -35,10 +35,10 @@ def training(base_model, config):
         for batch in tqdm(train_dataloader):
             # forward pass
             with torch.no_grad():
-                image, bboxes, gt_masks, mask_values = batch
+                image, points, gt_masks, mask_values = batch
                 gt_masks = gt_masks.to(device)
                 optimizer.zero_grad()
-                inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
+                inputs = processor(image, input_points=points, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
              
             #postprocessing
@@ -53,7 +53,10 @@ def training(base_model, config):
             optimizer.step()
             train_epoch_loss += train_loss.item()
         wandb.log({"train/train_loss": train_epoch_loss, "train/epoch": epoch})
+        train_epoch_loss = train_epoch_loss/len(train_dataloader)
         valid_epoch_loss = validate_model(model, processor, valid_dataloader, seg_loss, config)
+        valid_epoch_loss = valid_epoch_loss/len(valid_dataloader)
+        wandb.log({"val/valid_loss": valid_epoch_loss, "val/epoch": epoch})
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
         config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
@@ -103,10 +106,10 @@ def display_samples(model, processor, device, dataset, split, config):
             idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_val_nr"])]
     img = []
     for i in idx:
-        image, bboxes, gt_masks, mask_values = dataset[i]
+        image, points, gt_masks, mask_values = dataset[i]
         class_labels = config["mask_dict"]
         with torch.no_grad():
-            inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
+            inputs = processor(image, input_points=[points], return_tensors="pt")
             outputs = model(**inputs.to(device), multimask_output=False)
             masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
@@ -142,9 +145,9 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
     with torch.inference_mode():
         for batch in tqdm(valid_dl):
             # forward pass
-            image, bboxes, gt_masks, mask_values = batch
+            image, points, gt_masks, mask_values = batch
             gt_masks = gt_masks.to(device)
-            inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
+            inputs = processor(image, input_points=points, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
             masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
@@ -152,7 +155,7 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
             # compute loss
             train_loss = seg_loss(masks, gt_masks)
             epoch_loss += train_loss
-        wandb.log({"val/valid_loss": epoch_loss})
+        
     return epoch_loss
 
 class SAMDataset(TorchDataset):
@@ -207,10 +210,11 @@ class SAMDataset(TorchDataset):
                 final_mask_values.append(v)
                 x_indices, y_indices = np.where(labeled_gt_mask== c+1)
                 rand_idx = random.randrange(0, len(x_indices))
-                points.append([x_indices[rand_idx], y_indices[rand_idx]])
+                points.append([[x_indices[rand_idx], y_indices[rand_idx]]])
                 gt_mask = np.where(labeled_gt_mask== c+1, 1.0, 0.0)
                 gt_masks.append(gt_mask)
         return points, gt_masks, final_mask_values
+
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image = np.array(item["image"])
@@ -241,5 +245,5 @@ def custom_collate(data):
     gt_masks = pad_sequence(gt_masks, batch_first=True)
     mask_values = pad_sequence(mask_values, batch_first=True)
 
-    return [images, bboxes, gt_masks, mask_values]
+    return [images, points, gt_masks, mask_values]
 
