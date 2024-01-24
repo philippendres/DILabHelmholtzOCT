@@ -35,13 +35,14 @@ def training(base_model, config):
         for batch in tqdm(train_dataloader):
             # forward pass
             with torch.no_grad():
-                image, points, gt_masks, mask_values = batch
+                image, bboxes, gt_masks, mask_values = batch
                 gt_masks = gt_masks.to(device)
                 optimizer.zero_grad()
-                inputs = processor(image, input_points=points, return_tensors="pt").to(device)
+                inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
              
             #postprocessing
+
             masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
             masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
@@ -106,10 +107,10 @@ def display_samples(model, processor, device, dataset, split, config):
             idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_val_nr"])]
     img = []
     for i in idx:
-        image, points, gt_masks, mask_values = dataset[i]
+        image, bboxes, gt_masks, mask_values = dataset[i]
         class_labels = config["mask_dict"]
         with torch.no_grad():
-            inputs = processor(image, input_points=[points], return_tensors="pt")
+            inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
             outputs = model(**inputs.to(device), multimask_output=False)
             masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
@@ -145,9 +146,9 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
     with torch.inference_mode():
         for batch in tqdm(valid_dl):
             # forward pass
-            image, points, gt_masks, mask_values = batch
+            image, bboxes, gt_masks, mask_values = batch
             gt_masks = gt_masks.to(device)
-            inputs = processor(image, input_points=points, return_tensors="pt").to(device)
+            inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
             masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
@@ -223,27 +224,27 @@ class SAMDataset(TorchDataset):
         ground_truth_mask = np.array(item["label"])
         # get bounding box prompt
         #bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
-        points, gt_masks, mask_values= self.get_points_and_gt_masks(ground_truth_mask)
+        bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
 
         # prepare image and prompt for the model
         #inputs = self.processor(image, input_boxes=[bboxes], return_tensors="pt")
         # remove batch dimension which the processor adds by default
         #inputs = {k:v.squeeze(0) for k,v in inputs.items()}
         # add ground truth segmentation
-        return [image, points, gt_masks, mask_values]
+        return [image, bboxes, gt_masks, mask_values]
     
 def custom_collate(data):
     images = [d[0] for d in data]   
-    #bboxes = [torch.tensor(d[1]) for d in data]
-    points = [torch.tensor(d[1]) for d in data]
+    bboxes = [torch.tensor(d[1]) for d in data]
+    #points = [torch.tensor(d[1]) for d in data]
     gt_masks = [torch.tensor(np.array(d[2])) for d in data]
     mask_values = [torch.tensor(d[3]) for d in data]
 
     images = torch.tensor(np.array(images))
-    #bboxes = pad_sequence(bboxes, batch_first=True)
-    points = pad_sequence(points, batch_first=True)
+    bboxes = pad_sequence(bboxes, batch_first=True)
+    #points = pad_sequence(points, batch_first=True)
     gt_masks = pad_sequence(gt_masks, batch_first=True)
     mask_values = pad_sequence(mask_values, batch_first=True)
 
-    return [images, points, gt_masks, mask_values]
+    return [images, bboxes, gt_masks, mask_values]
 
