@@ -43,7 +43,7 @@ config = {
     "checkpoint": model_path,
     "learning_rate": 1e-3,
     "weight_decay": 0,
-    "epochs": 20,
+    "epochs": 10,
     "batch_size": 8,
     "shuffle": False,
     "data_transforms": [],

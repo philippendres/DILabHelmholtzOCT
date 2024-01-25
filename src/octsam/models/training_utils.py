@@ -13,14 +13,15 @@ from statistics import mean
 import torch
 from torch.nn.utils.rnn import pad_sequence 
 import torch.nn.functional as F
-from torch_topological.nn import SignatureLoss
-from torch_topological.nn import VietorisRipsComplex
+#from torch_topological.nn import SignatureLoss
+#from torch_topological.nn import VietorisRipsComplex
 import copy
+import evaluate
 
 def training(base_model, config):
     if config["topological"]:
-        vr = VietorisRipsComplex(dim=1)
-        topo_loss = SignatureLoss()
+        #vr = VietorisRipsComplex(dim=1)
+        #topo_loss = SignatureLoss()
         lamda = 1.0
     processor, model = prepare_model(base_model)
     train_dataset, train_dataloader = prepare_data(processor, config["dataset"], "train", config)
@@ -83,7 +84,41 @@ def training(base_model, config):
         config["display_samples"] != "no" and display_samples(model, mask_decoders,processor, device, train_dataset, "train", config)
         config["display_samples"] != "no" and display_samples(model, mask_decoders, processor, device, valid_dataset, "valid", config)
     torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
+    for i in range(config["nr_of_decoders"]):
+        torch.save(mask_decoders[i].state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] + "_" +str(i)+".pt")
+    evaluate_metrics(model, mask_decoders, valid_dataset, config, processor)
     wandb.finish()
+
+def evaluate_metrics(model, mask_decoders, dataset, config, processor):
+    metric = evaluate.load("mean_iou")
+    segmentations = []
+    ground_truths = []
+    for i in range(len(dataset)):
+        image, bboxes, gt_masks, mask_values, mask_counts = dataset[i]
+        gt_masks = torch.tensor(np.array(gt_masks))
+        class_labels = config["mask_dict"]
+        with torch.no_grad():
+            inputs = processor(image, input_boxes=[[[0,0,496,512]]], return_tensors="pt")
+            outputs=custom_forward(model, mask_decoders, **inputs.to("cuda"), multimask_output=False)
+            #outputs = model(**inputs.to(device), multimask_output=False)
+            masks = torch.zeros(1, 14, 496, 512)
+            for i in range(config["nr_of_decoders"]):
+                #masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
+                masks_i = F.interpolate(outputs[1][i][:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
+                masks_i = masks_i[..., : 992, : 1024]
+                masks[:,i,:,:] = F.interpolate(masks_i, (496,512), mode="bilinear", align_corners=False)    
+            masks = torch.argmax(masks, dim=1).squeeze()
+            gt_masks = torch.argmax(gt_masks, dim=0)
+        segmentations.append(masks)
+        ground_truths.append(gt_masks)
+    metric = metric.compute(
+        predictions=segmentations,
+        references=ground_truths,
+        ignore_index=255,
+        num_labels=14,
+        reduce_labels=False,
+    )
+    print(metric)
 
 def prepare_model(base_model):
     processor = SamProcessor.from_pretrained(base_model)
