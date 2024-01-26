@@ -18,6 +18,7 @@ import random
 import time
 from scipy.ndimage import label
 from topological_loss import topo_loss
+import os
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
@@ -65,7 +66,7 @@ def training(base_model, config):
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
         config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
-    torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
+    torch.save(model.state_dict(), os.path.join(config["checkpoint"], config["display_name"]) + "_" + config["time"] +".pt")
     wandb.finish()
 
 def prepare_model(base_model):
@@ -80,7 +81,7 @@ def prepare_model(base_model):
 def prepare_data(processor, dataset, split, config):
     dataset = datasets.load_from_disk(dataset)[split]
     config["data_transforms"] and dataset.set_transform(data_transforms(operations=config["data_transforms"]))
-    dataset = SAMDataset(dataset=dataset, processor=processor, config=config)
+    dataset = SAMDataset(dataset=dataset, config=config)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=config["shuffle"], collate_fn=custom_collate)
     return dataset, dataloader
 
@@ -173,9 +174,8 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
     return epoch_loss
 
 class SAMDataset(TorchDataset):
-    def __init__(self, dataset, processor, config):
+    def __init__(self, dataset, config):
         self.dataset = dataset
-        self.processor = processor
         self.config = config
 
     def __len__(self):
