@@ -17,6 +17,7 @@ import cv2
 import random
 import time
 import evaluate
+from scipy.ndimage import label
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
@@ -32,26 +33,21 @@ def training(base_model, config):
     for epoch in range(config["epochs"]):
         model.train()
         train_epoch_loss = 0
-        first = True
         for batch in tqdm(train_dataloader):
-            if first:
-                first = False
-                continue
             # forward pass
             with torch.no_grad():
-                image, bboxes, gt_masks, mask_values, mask_counts = batch
+                image, bboxes, gt_masks, mask_values = batch
                 gt_masks = gt_masks.to(device)
                 optimizer.zero_grad()
                 inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
              
             #postprocessing
+
             masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
             masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
             # compute loss
-            train_loss = 0
-            batched_mask_count = torch.sum(mask_counts, dim=0)
             train_loss = seg_loss(masks, gt_masks)
             # backward pass (compute gradients of parameters w.r.t. loss
             train_loss.backward()
@@ -61,6 +57,7 @@ def training(base_model, config):
         train_epoch_loss /= len(train_dataloader)
         wandb.log({"train/train_loss": train_epoch_loss, "train/epoch": epoch})
         valid_epoch_loss = validate_model(model, processor, valid_dataloader, seg_loss, config)
+        wandb.log({"val/valid_loss": valid_epoch_loss, "val/epoch": epoch})
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
         config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
@@ -76,23 +73,33 @@ def evaluate_metrics(model, processor, dataset, config):
     model.eval()
     segmentations = []
     ground_truths = []
-    for d in dataset:
-        image, bboxes, gt_masks, mask_values, mask_counts = d
-        gt_masks = torch.tensor(gt_masks)
+    for i in range(len(dataset)):
+        image, bboxes, gt_masks, mask_values = dataset[i]
+        class_labels = config["mask_dict"]
         with torch.no_grad():
-            gt_masks = gt_masks.to(device)
-            inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
-            outputs = model(**inputs, multimask_output=False)
-            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
+            inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
+            outputs = model(**inputs.to(device), multimask_output=False)
+            masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
             masks = masks[..., : 992, : 1024]
             masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
-        segmentations.append(masks)
-        ground_truths.append(gt_masks)
+            masks = torch.argmax(masks, dim=1).squeeze()
+            gt_masks = torch.tensor(np.array(gt_masks))
+            gt_masks = torch.argmax(gt_masks, dim=0)
+            for c in range(len(mask_values)):
+                if mask_values[c] == 0 and c > 0:
+                    break
+                masks = torch.where(masks==c, -mask_values[c], masks)
+                gt_masks = torch.where(gt_masks==c, -mask_values[c], gt_masks)
+            masks = masks.abs()
+            gt_masks = gt_masks.abs()
+            segmentations.append(masks.cpu().numpy())
+            ground_truths.append(gt_masks.cpu().numpy())
     metric = metric.compute(
-        predictions=[ segmentations ],
-        references=[ ground_truths ],
+        predictions=segmentations,
+        references=ground_truths,
         num_labels=14,
         reduce_labels=False,
+        ignore_index=255
     )
     print(metric)
         
@@ -140,7 +147,7 @@ def display_samples(model, processor, device, dataset, split, config):
             idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_val_nr"])]
     img = []
     for i in idx:
-        image, bboxes, gt_masks, mask_values, mask_counts = dataset[i]
+        image, bboxes, gt_masks, mask_values = dataset[i]
         class_labels = config["mask_dict"]
         with torch.no_grad():
             inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
@@ -151,6 +158,13 @@ def display_samples(model, processor, device, dataset, split, config):
             masks = torch.argmax(masks, dim=1).squeeze()
             gt_masks = torch.tensor(np.array(gt_masks))
             gt_masks = torch.argmax(gt_masks, dim=0)
+            for c in range(len(mask_values)):
+                if mask_values[c] == 0 and c > 0:
+                    break
+                masks = torch.where(masks==c, -mask_values[c], masks)
+                gt_masks = torch.where(gt_masks==c, -mask_values[c], gt_masks)
+            masks = masks.abs()
+            gt_masks = gt_masks.abs()
             image_masks = {
                 "pred": {"mask_data": masks.cpu().numpy(), "class_labels": class_labels},
                 # class_labels could be modified to show the difference better
@@ -172,7 +186,7 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
     with torch.inference_mode():
         for batch in tqdm(valid_dl):
             # forward pass
-            image, bboxes, gt_masks, mask_values, mask_counts = batch
+            image, bboxes, gt_masks, mask_values = batch
             gt_masks = gt_masks.to(device)
             inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
@@ -197,25 +211,51 @@ class SAMDataset(TorchDataset):
 
     def get_bboxes_and_gt_masks(self, ground_truth_mask):
         # get bounding boxes from mask
+        structure = np.ones((3, 3), dtype=np.int32)
         bboxes, gt_masks = [],[]
-        mask_values, mask_counts = np.unique(ground_truth_mask, return_counts=True)
+        mask_values= np.unique(ground_truth_mask)
+        final_mask_values = []
         #Comment for background prediction
         #mask_values, mask_counts = mask_values[1:], mask_counts[1:]
         for v in mask_values: 
-            x_indices, y_indices = np.where(ground_truth_mask == v)
-            x_min, x_max = np.min(x_indices), np.max(x_indices)
-            y_min, y_max = np.min(y_indices), np.max(y_indices)
-            # add perturbation to bounding box coordinates
-            H, W = ground_truth_mask.shape
-            x_min = max(0, x_min)
-            x_max = min(W, x_max)
-            y_min = max(0, y_min)
-            y_max = min(H, y_max)
-            bbox = [x_min, y_min, x_max, y_max]
-            bboxes.append(bbox)
-            gt_mask = np.where(ground_truth_mask == v, 1.0, 0.0)
-            gt_masks.append(gt_mask)
-        return bboxes, gt_masks, mask_values, mask_counts
+            binary_gt_mask = np.where(ground_truth_mask == v, 1.0, 0.0)
+            labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
+            for c in range(ncomponents):
+                final_mask_values.append(v)
+                x_indices, y_indices = np.where(labeled_gt_mask== c+1)
+                x_min, x_max = np.min(x_indices), np.max(x_indices)
+                y_min, y_max = np.min(y_indices), np.max(y_indices)
+                # add perturbation to bounding box coordinates
+                H, W = ground_truth_mask.shape
+                x_min = max(0, x_min)
+                x_max = min(W, x_max)
+                y_min = max(0, y_min)
+                y_max = min(H, y_max)
+                bbox = [x_min, y_min, x_max, y_max]
+                bboxes.append(bbox)
+                gt_mask = np.where(labeled_gt_mask== c+1, 1.0, 0.0)
+                gt_masks.append(gt_mask)
+        return bboxes, gt_masks, final_mask_values
+
+    def get_points_and_gt_masks(self, ground_truth_mask):
+        # get bounding boxes from mask
+        structure = np.ones((3, 3), dtype=np.int32)
+        points, gt_masks = [],[]
+        mask_values= np.unique(ground_truth_mask)
+        final_mask_values = []
+        #Comment for background prediction
+        #mask_values, mask_counts = mask_values[1:], mask_counts[1:]
+        for v in mask_values: 
+            binary_gt_mask = np.where(ground_truth_mask == v, 1.0, 0.0)
+            labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
+            for c in range(ncomponents):
+                final_mask_values.append(v)
+                x_indices, y_indices = np.where(labeled_gt_mask== c+1)
+                rand_idx = random.randrange(0, len(x_indices))
+                points.append([[x_indices[rand_idx], y_indices[rand_idx]]])
+                gt_mask = np.where(labeled_gt_mask== c+1, 1.0, 0.0)
+                gt_masks.append(gt_mask)
+        return points, gt_masks, final_mask_values
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
@@ -224,26 +264,28 @@ class SAMDataset(TorchDataset):
             image = cv2.applyColorMap(image[:, :, 0], self.config["pseudocolor"])
         ground_truth_mask = np.array(item["label"])
         # get bounding box prompt
-        bboxes, gt_masks, mask_values, mask_counts = self.get_bboxes_and_gt_masks(ground_truth_mask)
+        #bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
+        bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
+
         # prepare image and prompt for the model
         #inputs = self.processor(image, input_boxes=[bboxes], return_tensors="pt")
         # remove batch dimension which the processor adds by default
         #inputs = {k:v.squeeze(0) for k,v in inputs.items()}
         # add ground truth segmentation
-        return [image, bboxes, gt_masks, mask_values, mask_counts]
+        return [image, bboxes, gt_masks, mask_values]
     
 def custom_collate(data):
     images = [d[0] for d in data]   
     bboxes = [torch.tensor(d[1]) for d in data]
+    #points = [torch.tensor(d[1]) for d in data]
     gt_masks = [torch.tensor(np.array(d[2])) for d in data]
     mask_values = [torch.tensor(d[3]) for d in data]
-    mask_counts = [torch.tensor(d[4]) for d in data]
 
     images = torch.tensor(np.array(images))
     bboxes = pad_sequence(bboxes, batch_first=True)
+    #points = pad_sequence(points, batch_first=True)
     gt_masks = pad_sequence(gt_masks, batch_first=True)
     mask_values = pad_sequence(mask_values, batch_first=True)
-    mask_counts = pad_sequence(mask_counts, batch_first=True)
 
-    return [images, bboxes, gt_masks, mask_values, mask_counts]
+    return [images, bboxes, gt_masks, mask_values]
 
