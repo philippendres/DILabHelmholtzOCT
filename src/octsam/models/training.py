@@ -161,6 +161,9 @@ mask_dict = {k: v for k, v in enumerate(mask_dict)}
 config.update({
     "mask_dict": mask_dict,
 })
+config["topological"] = False
+# Choose the prompt type out of bboxes and points
+config["prompt_type"] = "points"
 
 wandb.init(
     project=args.project_name,

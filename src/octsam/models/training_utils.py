@@ -18,14 +18,15 @@ import random
 import time
 import evaluate
 from scipy.ndimage import label
+from topological_loss import topo_loss
+import os
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
     train_dataset, train_dataloader = prepare_data(processor, config["dataset"], "train", config)
     valid_dataset, valid_dataloader = prepare_data(processor, config["dataset"], "test", config)
     optimizer = Adam(model.mask_decoder.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
-    #TODO: Test other losses, implement topological loss
-    seg_loss = monai.losses.DiceCELoss(softmax=True)
+    seg_loss = monai.losses.DiceCELoss(sigmoid=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
     config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
@@ -36,19 +37,23 @@ def training(base_model, config):
         for batch in tqdm(train_dataloader):
             # forward pass
             with torch.no_grad():
-                image, bboxes, gt_masks, mask_values = batch
+                if (config["prompt_type"]=="points"):
+                    image, points, gt_masks, mask_values = batch
+                    inputs = processor(image, input_points=points, return_tensors="pt").to(device)
+                else:
+                    image, bboxes, gt_masks, mask_values = batch
+                    inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
                 gt_masks = gt_masks.to(device)
                 optimizer.zero_grad()
-                inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
             outputs = model(**inputs, multimask_output=False)
-             
             #postprocessing
-
-            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
-            masks = masks[..., : 992, : 1024]
-            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
+            masks = F.interpolate(outputs.pred_masks.squeeze(2), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : inputs["reshaped_input_sizes"][0,0], : inputs["reshaped_input_sizes"][0,1]]
+            masks = F.interpolate(masks, (inputs["original_sizes"][0,0],inputs["original_sizes"][0,1]), mode="bilinear", align_corners=False)
             # compute loss
             train_loss = seg_loss(masks, gt_masks)
+            if config["topological"]:
+                train_loss += topo_loss(torch.sigmoid(masks.float()), gt_masks.float(),0.1, feat_d=1, interp=50)
             # backward pass (compute gradients of parameters w.r.t. loss
             train_loss.backward()
             # optimize
@@ -116,7 +121,7 @@ def prepare_model(base_model):
 def prepare_data(processor, dataset, split, config):
     dataset = datasets.load_from_disk(dataset)[split]
     config["data_transforms"] and dataset.set_transform(data_transforms(operations=config["data_transforms"]))
-    dataset = SAMDataset(dataset=dataset, processor=processor, config=config)
+    dataset = SAMDataset(dataset=dataset, config=config)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=config["shuffle"], collate_fn=custom_collate)
     return dataset, dataloader
 
@@ -134,6 +139,7 @@ def data_transforms(batch, operations):
 
 def display_samples(model, processor, device, dataset, split, config):
     model.eval()
+    # Choose images to display
     if config["display_mode"] == "predefined":
         idx = config["display_idx"]
     elif config["display_mode"] != "none":
@@ -146,15 +152,19 @@ def display_samples(model, processor, device, dataset, split, config):
         else:
             idx = [random.randint(0, len(dataset) - 1) for i in range(config["display_val_nr"])]
     img = []
+    class_labels = config["mask_dict"]
     for i in idx:
-        image, bboxes, gt_masks, mask_values = dataset[i]
-        class_labels = config["mask_dict"]
         with torch.no_grad():
-            inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
+            if (config["prompt_type"]=="points"):
+                image, points, gt_masks, mask_values = dataset[i]
+                inputs = processor(image, input_points=[points], return_tensors="pt")
+            else:
+                image, bboxes, gt_masks, mask_values = dataset[i]
+                inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
             outputs = model(**inputs.to(device), multimask_output=False)
-            masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
-            masks = masks[..., : 992, : 1024]
-            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
+            masks = F.interpolate(outputs.pred_masks.squeeze(2), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : inputs["reshaped_input_sizes"][0,0], : inputs["reshaped_input_sizes"][0,1]]
+            masks = F.interpolate(masks, (inputs["original_sizes"][0,0],inputs["original_sizes"][0,1]), mode="bilinear", align_corners=False)
             masks = torch.argmax(masks, dim=1).squeeze()
             gt_masks = torch.tensor(np.array(gt_masks))
             gt_masks = torch.argmax(gt_masks, dim=0)
@@ -174,7 +184,6 @@ def display_samples(model, processor, device, dataset, split, config):
                 image,
                 masks=image_masks,
             ))
-        
         wandb.log({split+"_samples" :img})
     model.train()
 
@@ -186,24 +195,31 @@ def validate_model(model, processor, valid_dl, seg_loss, config, log_images=Fals
     with torch.inference_mode():
         for batch in tqdm(valid_dl):
             # forward pass
-            image, bboxes, gt_masks, mask_values = batch
-            gt_masks = gt_masks.to(device)
-            inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
+            if (config["prompt_type"]=="points"):
+                image, points, gt_masks, mask_values = batch
+                inputs = processor(image, input_points=points, return_tensors="pt").to(device)
+            else:
+                image, bboxes, gt_masks, mask_values = batch
+                inputs = processor(image, input_boxes=bboxes, return_tensors="pt").to(device)
+            gt_masks = gt_masks.to(device)  
             outputs = model(**inputs, multimask_output=False)
-            masks = F.interpolate(outputs.pred_masks.squeeze(), (1024,1024), mode="bilinear", align_corners=False)
-            masks = masks[..., : 992, : 1024]
-            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
+            masks = F.interpolate(outputs.pred_masks.squeeze(2), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : inputs["reshaped_input_sizes"][0,0], : inputs["reshaped_input_sizes"][0,1]]
+            masks = F.interpolate(masks, (inputs["original_sizes"][0,0],inputs["original_sizes"][0,1]), mode="bilinear", align_corners=False)
             # compute loss
             train_loss = seg_loss(masks, gt_masks)
             epoch_loss += train_loss
+            valid_loss = seg_loss(masks, gt_masks)
+            if config["topological"]:
+                valid_loss += topo_loss(torch.sigmoid(masks.float()), gt_masks.float(),0.1, feat_d=1, interp=50)
+            epoch_loss += valid_loss
         epoch_loss /= len(valid_dl)
-        wandb.log({"val/valid_loss": epoch_loss})
+        wandb.log({"val/valid_loss": epoch_loss})    
     return epoch_loss
 
 class SAMDataset(TorchDataset):
-    def __init__(self, dataset, processor, config):
+    def __init__(self, dataset, config):
         self.dataset = dataset
-        self.processor = processor
         self.config = config
 
     def __len__(self):
@@ -216,7 +232,7 @@ class SAMDataset(TorchDataset):
         mask_values= np.unique(ground_truth_mask)
         final_mask_values = []
         #Comment for background prediction
-        #mask_values, mask_counts = mask_values[1:], mask_counts[1:]
+        #mask_values = mask_values[1:]
         for v in mask_values: 
             binary_gt_mask = np.where(ground_truth_mask == v, 1.0, 0.0)
             labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
@@ -227,10 +243,10 @@ class SAMDataset(TorchDataset):
                 y_min, y_max = np.min(y_indices), np.max(y_indices)
                 # add perturbation to bounding box coordinates
                 H, W = ground_truth_mask.shape
-                x_min = max(0, x_min)
-                x_max = min(W, x_max)
-                y_min = max(0, y_min)
-                y_max = min(H, y_max)
+                x_min = max(0, x_min + np.random.randint(-10, 10))
+                x_max = min(W, x_max + np.random.randint(-10, 10))
+                y_min = max(0, y_min + np.random.randint(-10, 10))
+                y_max = min(H, y_max + np.random.randint(-10, 10))
                 bbox = [x_min, y_min, x_max, y_max]
                 bboxes.append(bbox)
                 gt_mask = np.where(labeled_gt_mask== c+1, 1.0, 0.0)
@@ -238,13 +254,12 @@ class SAMDataset(TorchDataset):
         return bboxes, gt_masks, final_mask_values
 
     def get_points_and_gt_masks(self, ground_truth_mask):
-        # get bounding boxes from mask
         structure = np.ones((3, 3), dtype=np.int32)
         points, gt_masks = [],[]
         mask_values= np.unique(ground_truth_mask)
         final_mask_values = []
         #Comment for background prediction
-        #mask_values, mask_counts = mask_values[1:], mask_counts[1:]
+        #mask_values= mask_values[1:]
         for v in mask_values: 
             binary_gt_mask = np.where(ground_truth_mask == v, 1.0, 0.0)
             labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
@@ -263,29 +278,25 @@ class SAMDataset(TorchDataset):
         if (self.config["pseudocolor"] != None):
             image = cv2.applyColorMap(image[:, :, 0], self.config["pseudocolor"])
         ground_truth_mask = np.array(item["label"])
-        # get bounding box prompt
-        #bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
-        bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
-
-        # prepare image and prompt for the model
-        #inputs = self.processor(image, input_boxes=[bboxes], return_tensors="pt")
-        # remove batch dimension which the processor adds by default
-        #inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-        # add ground truth segmentation
-        return [image, bboxes, gt_masks, mask_values]
+        if (self.config["prompt_type"]=="points"):
+            points, gt_masks, mask_values= self.get_points_and_gt_masks(ground_truth_mask)
+            return [image, points, gt_masks, mask_values]
+        else:
+            bboxes, gt_masks, mask_values= self.get_bboxes_and_gt_masks(ground_truth_mask)
+            return [image, bboxes, gt_masks, mask_values]
     
 def custom_collate(data):
     images = [d[0] for d in data]   
-    bboxes = [torch.tensor(d[1]) for d in data]
-    #points = [torch.tensor(d[1]) for d in data]
-    gt_masks = [torch.tensor(np.array(d[2])) for d in data]
-    mask_values = [torch.tensor(d[3]) for d in data]
-
     images = torch.tensor(np.array(images))
-    bboxes = pad_sequence(bboxes, batch_first=True)
-    #points = pad_sequence(points, batch_first=True)
+    gt_masks = [torch.tensor(np.array(d[2])) for d in data]
     gt_masks = pad_sequence(gt_masks, batch_first=True)
+    mask_values = [torch.tensor(d[3]) for d in data]
     mask_values = pad_sequence(mask_values, batch_first=True)
+    prompt = [torch.tensor(d[1]) for d in data]
+    prompt = pad_sequence(prompt, batch_first=True)
+    return [images, prompt, gt_masks, mask_values]
+    
+    
 
-    return [images, bboxes, gt_masks, mask_values]
+    
 
