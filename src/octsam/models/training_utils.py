@@ -19,7 +19,10 @@ import time
 import evaluate
 from scipy.ndimage import label
 from topological_loss import topo_loss
+import sklearn
 import os
+
+NO_BEST_WORST_SAMPLES = 3
 
 def training(base_model, config):
     processor, model = prepare_model(base_model)
@@ -28,17 +31,22 @@ def training(base_model, config):
     optimizer = Adam(model.mask_decoder.parameters(), lr=config["learning_rate"], weight_decay=config["weight_decay"])
     seg_loss = monai.losses.DiceCELoss(sigmoid=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(device)
     model.to(device)
     config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
     config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
     for epoch in range(config["epochs"]):
         model.train()
         train_epoch_loss = 0
+        first = True
         for batch in tqdm(train_dataloader):
+            if first:
+                first = False
+                continue
             # forward pass
             with torch.no_grad():
                 if (config["prompt_type"]=="points"):
-                    image, points, gt_masks, mask_values = batch
+                    image, points, gt_masks, mask_values, mask_counts = batch
                     inputs = processor(image, input_points=points, return_tensors="pt").to(device)
                 else:
                     image, bboxes, gt_masks, mask_values = batch
@@ -51,6 +59,7 @@ def training(base_model, config):
             masks = masks[..., : inputs["reshaped_input_sizes"][0,0], : inputs["reshaped_input_sizes"][0,1]]
             masks = F.interpolate(masks, (inputs["original_sizes"][0,0],inputs["original_sizes"][0,1]), mode="bilinear", align_corners=False)
             # compute loss
+            train_loss = 0
             train_loss = seg_loss(masks, gt_masks)
             if config["topological"]:
                 train_loss += topo_loss(torch.sigmoid(masks.float()), gt_masks.float(),0.1, feat_d=1, interp=50)
@@ -68,45 +77,152 @@ def training(base_model, config):
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
     torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
     if config["evaluate"]:
-        evaluate_metrics(model, processor, valid_dataset, config)
+        evaluate_metrics(model, valid_dataset, config, processor)
     wandb.finish()
     
-def evaluate_metrics(model, processor, dataset, config):
-    "Evaluate model with mean iou metric"
-    metric = evaluate.load("mean_iou")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+def evaluate_metrics(model, dataset, config, processor):
+    processor = SamProcessor.from_pretrained(config["base_model"])
+    model = SamModel.from_pretrained(config["base_model"])
+    model.load_state_dict(torch.load(config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt"))
+    dataset = datasets.load_from_disk(config["dataset"])["test"]
+    dataset = SAMDataset(dataset=dataset, config=config)
     model.eval()
+    metric_iou = evaluate.load("mean_iou")
     segmentations = []
+    segmentations_probas = []
     ground_truths = []
-    for i in range(len(dataset)):
-        image, bboxes, gt_masks, mask_values = dataset[i]
-        class_labels = config["mask_dict"]
+    indexes = []
+    category_accuracies = np.zeros(14)
+    category_ious = np.zeros(14)
+    category_f1 = np.zeros(14)
+    category_dice = np.zeros(14)
+    category_spec = np.zeros(14)
+    category_sens = np.zeros(14)
+    category_map = np.zeros(14)
+    for i in range(14):
+        segmentations.append([])
+        ground_truths.append([])
+        segmentations_probas.append([])
+        indexes.append([])
+    for i in tqdm(range(len(dataset))):
         with torch.no_grad():
-            inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
-            outputs = model(**inputs.to(device), multimask_output=False)
-            masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
-            masks = masks[..., : 992, : 1024]
-            masks = F.interpolate(masks, (496,512), mode="bilinear", align_corners=False)
-            masks = torch.argmax(masks, dim=1).squeeze()
-            gt_masks = torch.tensor(np.array(gt_masks))
-            gt_masks = torch.argmax(gt_masks, dim=0)
+            if (config["prompt_type"]=="points"):
+                image, points, gt_masks, mask_values = dataset[i]
+                inputs = processor(image, input_points= [points], return_tensors="pt")
+            else:
+                image, bboxes, gt_masks, mask_values = dataset[i]
+                inputs = processor(image, input_boxes=[bboxes], return_tensors="pt")
+            outputs= model(**inputs, multimask_output=False)
+            masks = torch.zeros(1, 14, 496, 512)
+            masks = F.interpolate(outputs.pred_masks.squeeze(2), (1024,1024), mode="bilinear", align_corners=False)
+            masks = masks[..., : inputs["reshaped_input_sizes"][0,0], : inputs["reshaped_input_sizes"][0,1]]
+            masks = F.interpolate(masks, (inputs["original_sizes"][0,0],inputs["original_sizes"][0,1]), mode="bilinear", align_corners=False)
+            masks = torch.sigmoid(masks).squeeze().numpy()
+            binary_masks = (masks > 0.5).astype(np.uint8)
             for c in range(len(mask_values)):
                 if mask_values[c] == 0 and c > 0:
                     break
-                masks = torch.where(masks==c, -mask_values[c], masks)
-                gt_masks = torch.where(gt_masks==c, -mask_values[c], gt_masks)
-            masks = masks.abs()
-            gt_masks = gt_masks.abs()
-            segmentations.append(masks.cpu().numpy())
-            ground_truths.append(gt_masks.cpu().numpy())
-    metric = metric.compute(
-        predictions=segmentations,
-        references=ground_truths,
-        num_labels=14,
-        reduce_labels=False,
-        ignore_index=255
-    )
-    print(metric)
+                segmentations[mask_values[c]].append(binary_masks[c])
+                segmentations_probas[mask_values[c]].append(masks[c])
+                ground_truths[mask_values[c]].append(gt_masks[c])
+                indexes[mask_values[c]].append(i)
+        
+    for i in range(14):
+        print(f"------------------CLASS: {config['mask_dict'][i]}----------------------")
+        metric_output = metric_iou.compute(
+            predictions=segmentations[i],
+            references=ground_truths[i],
+            ignore_index=255,
+            num_labels=2,
+            reduce_labels=False,
+        )
+        category_accuracies[i] = metric_output['per_category_accuracy'][1]
+        category_ious[i] = metric_output['per_category_iou'][1]
+        flat_gt = np.array(ground_truths[i]).reshape(-1)
+        flat_seg = np.array(segmentations[i]).reshape(-1)
+        flat_segp = np.array(segmentations_probas[i]).reshape(-1)
+        
+        category_f1[i] = sklearn.metrics.f1_score(flat_gt, flat_seg)
+        category_map[i] = sklearn.metrics.average_precision_score(flat_gt, flat_segp)
+        tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+        category_sens[i] = tp / (tp + fn) if (tp + fn) != 0 else 0.0
+        category_spec[i] = tn / (tn + fp) if (tn + fp) != 0 else 0.0
+        category_dice[i] = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0
+        
+        sample_iou = []
+        sample_accuracy = []
+        sample_spec = []
+        sample_sens = []
+        sample_f1 = []
+        sample_dice = []
+        sample_ap = []
+        
+        for j in range(len(segmentations[i])):
+            metric_output = metric_iou.compute(
+                predictions=[segmentations[i][j]],
+                references=[ground_truths[i][j]],
+                ignore_index=255,
+                num_labels=2,
+                reduce_labels=False,
+            )
+            flat_gt = np.array(ground_truths[i][j]).reshape(-1)
+            flat_seg = np.array(segmentations[i][j]).reshape(-1)
+            flat_segp = np.array(segmentations_probas[i][j]).reshape(-1)
+            tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+            sample_iou.append(metric_output['per_category_iou'][1])
+            sample_accuracy.append(metric_output['per_category_accuracy'][1])
+            sample_spec.append(tn / (tn + fp) if (tn + fp) != 0 else 0.0)
+            sample_sens.append(tp / (tp + fn) if (tp + fn) != 0 else 0.0)
+            sample_f1.append(sklearn.metrics.f1_score(flat_gt, flat_seg))
+            sample_dice.append(2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0)
+            sample_ap.append(sklearn.metrics.average_precision_score(flat_gt, flat_segp))
+        
+        avg_start_idx = len(sample_iou) // 2 - NO_BEST_WORST_SAMPLES // 2
+        avg_end_idx = len(sample_iou) // 2 + NO_BEST_WORST_SAMPLES // 2
+        idx = np.array(indexes[i])
+        
+        print(f"GENERAL REPORT:")
+        print(metric_output)
+        print(f"----IoU----:")
+        print(f"{category_ious[i]} \ {np.mean(sample_iou)}")
+        print(f"Best samples: {idx[np.argsort(sample_iou)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_iou)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_iou)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Accuracy----:")
+        print(f"{category_accuracies[i]} \ {np.mean(sample_accuracy)}")
+        print(f"Best samples: {idx[np.argsort(sample_accuracy)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_accuracy)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_accuracy)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Specificity----:")
+        print(f"{category_spec[i]} \ {np.mean(sample_spec)}")
+        print(f"Best samples: {idx[np.argsort(sample_spec)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_spec)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_spec)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Sensitivity----:")
+        print(f"{category_sens[i]} \ {np.mean(sample_sens)}")
+        print(f"Best samples: {idx[np.argsort(sample_sens)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_sens)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_sens)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----F1----:")
+        print(f"{category_f1[i]} \ {np.mean(sample_f1)}")
+        print(f"Best samples: {idx[np.argsort(sample_f1)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_f1)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_f1)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Dice----:")
+        print(f"{category_dice[i]} \ {np.mean(sample_dice)}")
+        print(f"Best samples: {idx[np.argsort(sample_dice)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_dice)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_dice)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----AP----:")
+        print(f"{category_map[i]} \ {np.mean(sample_ap)}")
+        print(f"Best samples: {idx[np.argsort(sample_ap)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_ap)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_ap)[:NO_BEST_WORST_SAMPLES]]}")
+        
+    print("Category_accuracies:" + str(list(category_accuracies))+"\n"+"Category_ious:"+str(list(category_ious))+"\n")
+    mean_iou = np.mean(category_ious)
+    mean_accuracy = np.mean(category_accuracies)
+    print("Mean_accuracy:" + str(mean_accuracy)+"\n"+"Mean_iou:"+str(mean_iou))
         
 
 def prepare_model(base_model):
@@ -295,8 +411,3 @@ def custom_collate(data):
     prompt = [torch.tensor(d[1]) for d in data]
     prompt = pad_sequence(prompt, batch_first=True)
     return [images, prompt, gt_masks, mask_values]
-    
-    
-
-    
-

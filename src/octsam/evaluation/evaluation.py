@@ -16,6 +16,7 @@ import random
 import time
 from scipy.ndimage import label
 import evaluate
+import sklearn.metrics
 # Model info
 # base_models = ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
 base_model = "facebook/sam-vit-base"
@@ -24,19 +25,36 @@ dataset_path = "/vol/data/datasets/processed/custom/default_preprocessed_at_24-0
 pseudocolor = "grayscale"
 prompt_type = "bboxes"
 
+# TODO: Add to config
+NO_BEST_WORST_SAMPLES = 2
+
 
 ###
 def evaluate_metrics(model, dataset, config, processor):
+    #processor = SamProcessor.from_pretrained(config["base_model"])
+    #model = SamModel.from_pretrained(config["base_model"])
+    #model.load_state_dict(torch.load(config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt"))
+    #dataset = datasets.load_from_disk(config["dataset"])["test"]
+    #dataset = SAMDataset(dataset=dataset, processor=processor, config=config)
     model.eval()
-    metric = evaluate.load("mean_iou")
+    metric_iou = evaluate.load("mean_iou")
     segmentations = []
+    segmentations_probas = []
     ground_truths = []
+    indexes = []
     category_accuracies = np.zeros(14)
     category_ious = np.zeros(14)
+    category_f1 = np.zeros(14)
+    category_dice = np.zeros(14)
+    category_spec = np.zeros(14)
+    category_sens = np.zeros(14)
+    category_map = np.zeros(14)
     for i in range(14):
         segmentations.append([])
         ground_truths.append([])
-    for i in tqdm(range(len(dataset))):
+        segmentations_probas.append([])
+        indexes.append([])
+    for i in tqdm(range(15)):
         with torch.no_grad():
             if (config["prompt_type"]=="points"):
                 image, points, gt_masks, mask_values = dataset[i]
@@ -55,10 +73,13 @@ def evaluate_metrics(model, dataset, config, processor):
                 if mask_values[c] == 0 and c > 0:
                     break
                 segmentations[mask_values[c]].append(binary_masks[c])
+                segmentations_probas[mask_values[c]].append(masks[c])
                 ground_truths[mask_values[c]].append(gt_masks[c])
+                indexes[mask_values[c]].append(i)
         
     for i in range(14):
-        metric_output = metric.compute(
+        print(f"------------------CLASS: {mask_dict[i]}----------------------")
+        metric_output = metric_iou.compute(
             predictions=segmentations[i],
             references=ground_truths[i],
             ignore_index=255,
@@ -67,7 +88,88 @@ def evaluate_metrics(model, dataset, config, processor):
         )
         category_accuracies[i] = metric_output['per_category_accuracy'][1]
         category_ious[i] = metric_output['per_category_iou'][1]
+        flat_gt = np.array(ground_truths[i]).reshape(-1)
+        flat_seg = np.array(segmentations[i]).reshape(-1)
+        flat_segp = np.array(segmentations_probas[i]).reshape(-1)
+        
+        category_f1[i] = sklearn.metrics.f1_score(flat_gt, flat_seg)
+        category_map[i] = sklearn.metrics.average_precision_score(flat_gt, flat_segp)
+        tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+        category_sens[i] = tp / (tp + fn) if (tp + fn) != 0 else 0.0
+        category_spec[i] = tn / (tn + fp) if (tn + fp) != 0 else 0.0
+        category_dice[i] = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0
+        
+        sample_iou = []
+        sample_accuracy = []
+        sample_spec = []
+        sample_sens = []
+        sample_f1 = []
+        sample_dice = []
+        sample_ap = []
+        
+        for j in range(len(segmentations[i])):
+            metric_output = metric_iou.compute(
+                predictions=[segmentations[i][j]],
+                references=[ground_truths[i][j]],
+                ignore_index=255,
+                num_labels=2,
+                reduce_labels=False,
+            )
+            flat_gt = np.array(ground_truths[i][j]).reshape(-1)
+            flat_seg = np.array(segmentations[i][j]).reshape(-1)
+            flat_segp = np.array(segmentations_probas[i][j]).reshape(-1)
+            tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+            sample_iou.append(metric_output['per_category_iou'][1])
+            sample_accuracy.append(metric_output['per_category_accuracy'][1])
+            sample_spec.append(tn / (tn + fp) if (tn + fp) != 0 else 0.0)
+            sample_sens.append(tp / (tp + fn) if (tp + fn) != 0 else 0.0)
+            sample_f1.append(sklearn.metrics.f1_score(flat_gt, flat_seg))
+            sample_dice.append(2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0)
+            sample_ap.append(sklearn.metrics.average_precision_score(flat_gt, flat_segp))
+        
+        avg_start_idx = len(sample_iou) // 2 - NO_BEST_WORST_SAMPLES // 2
+        avg_end_idx = len(sample_iou) // 2 + NO_BEST_WORST_SAMPLES // 2
+        idx = np.array(indexes[i])
+        
+        print(f"GENERAL REPORT:")
         print(metric_output)
+        print(f"----IoU----:")
+        print(f"{category_ious[i]} \ {np.mean(sample_iou)}")
+        print(f"Best samples: {idx[np.argsort(sample_iou)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_iou)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_iou)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Accuracy----:")
+        print(f"{category_accuracies[i]} \ {np.mean(sample_accuracy)}")
+        print(f"Best samples: {idx[np.argsort(sample_accuracy)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_accuracy)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_accuracy)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Specificity----:")
+        print(f"{category_spec[i]} \ {np.mean(sample_spec)}")
+        print(f"Best samples: {idx[np.argsort(sample_spec)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_spec)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_spec)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Sensitivity----:")
+        print(f"{category_sens[i]} \ {np.mean(sample_sens)}")
+        print(f"Best samples: {idx[np.argsort(sample_sens)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_sens)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_sens)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----F1----:")
+        print(f"{category_f1[i]} \ {np.mean(sample_f1)}")
+        print(f"Best samples: {idx[np.argsort(sample_f1)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_f1)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_f1)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Dice----:")
+        print(f"{category_dice[i]} \ {np.mean(sample_dice)}")
+        print(f"Best samples: {idx[np.argsort(sample_dice)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_dice)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_dice)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----AP----:")
+        print(f"{category_map[i]} \ {np.mean(sample_ap)}")
+        print(f"Best samples: {idx[np.argsort(sample_ap)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_ap)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_ap)[:NO_BEST_WORST_SAMPLES]]}")
+        
+        
         f = open(config["results_path"], "a")
         f.write(str(metric_output)+"\n")
         f.close()
@@ -79,7 +181,6 @@ def evaluate_metrics(model, dataset, config, processor):
     f = open(config["results_path"], "a")
     f.write("Mean_accuracy:" + str(mean_accuracy)+"\n"+"Mean_iou:"+str(mean_iou))
     f.close()
-###
 
 class SAMDataset(TorchDataset):
     def __init__(self, dataset, processor, config):

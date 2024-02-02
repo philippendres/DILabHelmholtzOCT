@@ -32,7 +32,7 @@ parser.add_argument("--loss", type=str, default="diceCE")
 # datasets = ["custom", "dme", "amd"]
 parser.add_argument("--dataset", type=str, default="custom")
 parser.add_argument("--data_directory", type=str, default="/vol/data")
-parser.add_argument("--dataset_name", type=str, default="default_preprocessed_at_23-12-22_16.11.35")
+parser.add_argument("--dataset_name", type=str, default="default_preprocessed_at_24-01-10_13.41.28")
 
 #Training parameters
 parser.add_argument("--lr", type=float, default=1e-3)
@@ -86,6 +86,10 @@ parser.add_argument("--display_name", type=str, default="")
 
 parser.add_argument("--evaluate", type=bool, default=True)
 
+parser.add_argument("--prompt", type=str, default="points")
+
+parser.add_argument("--top", type=bool, default=False)
+
 args = parser.parse_args()
 
 
@@ -117,7 +121,9 @@ config = {
     "mode": modes[args.mode],
     "display_mode": args.display_mode, 
     "pseudocolor": OCV_COLORMAPS[args.pseudocolor],
-    "evaluate": args.evaluate
+    "evaluate": args.evaluate,
+    "topological": args.top,
+    "prompt_type": args.prompt
 }
 
 # Choose the mode for display_samples
@@ -161,9 +167,7 @@ mask_dict = {k: v for k, v in enumerate(mask_dict)}
 config.update({
     "mask_dict": mask_dict,
 })
-config["topological"] = False
-# Choose the prompt type out of bboxes and points
-config["prompt_type"] = "points"
+
 
 wandb.init(
     project=args.project_name,
