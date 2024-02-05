@@ -22,7 +22,7 @@ import sklearn.metrics
 base_model = "facebook/sam-vit-base"
 checkpoint_path = "/vol/data/models/custom_24-01-24_23.49.46"
 dataset_path = "/vol/data/datasets/processed/custom/default_preprocessed_at_24-01-10_13.41.28"
-pseudocolor = "grayscale"
+pseudocolor = "Bone"
 prompt_type = "bboxes"
 
 # TODO: Add to config

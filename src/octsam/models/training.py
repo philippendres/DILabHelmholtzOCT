@@ -88,7 +88,7 @@ parser.add_argument("--evaluate", type=bool, default=True)
 
 parser.add_argument("--prompt", type=str, default="points")
 
-parser.add_argument("--top", type=bool, default=False)
+parser.add_argument('--top', action='store_true')
 
 args = parser.parse_args()
 
@@ -132,6 +132,7 @@ if args.display_mode == "predefined":
 elif args.display_mode != "none":
     config["display_val_nr"] = args.display_val_nr
     config["display_train_nr"] = args.display_train_nr
+
 
 # TODO: Move to argparse?
 display_modes = ["single_masks", "all_masks"]
@@ -177,5 +178,7 @@ wandb.init(
     save_code=True,
     dir = "/vol/data/runs",
 )
+
+print("CONFIG: ", config)
 
 training(args.base_model, config)
