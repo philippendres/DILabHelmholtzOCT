@@ -20,7 +20,7 @@ project_name = "OCT_segmentation"
 entity = "dilab-helmholtz"
 # Choose base_model
 base_models = ["facebook/sam-vit-base", "facebook/sam-vit-huge", "facebook/sam-vit-large", "wanglab/medsam-vit-base"]
-base_model = base_models[2]
+base_model = base_models[0]
 # Choose dataset
 datasets = ["custom", "dme", "amd"]
 dataset = datasets[0]
@@ -44,14 +44,15 @@ config = {
     "learning_rate": 1e-3,
     "weight_decay": 0,
     "epochs": 10,
-    "batch_size": 4,
+    "batch_size": 8,
     "shuffle": False,
     "data_transforms": [],
     "optimizer": "adam",
     "loss": loss,
     "time": time,
     "topological":False,
-    "nr_of_decoders": 14
+    "nr_of_decoders": 14,
+    "pseudo_coloring":"Bone"
 }
 
 # Choose the mode for display_samples

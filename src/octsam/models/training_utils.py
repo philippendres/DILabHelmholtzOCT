@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import copy
 import evaluate
 import sklearn
+import cv2
 NO_BEST_WORST_SAMPLES = 3
 
 def training(base_model, config):
@@ -443,7 +444,7 @@ def custom_forward(model, mask_decoders,
 def prepare_data(processor, dataset, split, config):
     dataset = datasets.load_from_disk(dataset)[split]
     config["data_transforms"] and dataset.set_transform(data_transforms(operations=config["data_transforms"]))
-    dataset = SAMDataset(dataset=dataset)
+    dataset = SAMDataset(dataset=dataset, config = config)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=config["shuffle"], collate_fn=custom_collate)
     return dataset, dataloader
 
@@ -527,8 +528,9 @@ def validate_model(model, mask_decoders, processor, valid_dl, seg_loss, config, 
     return epoch_loss
 
 class SAMDataset(TorchDataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, config):
         self.dataset = dataset
+        self.config = config
 
     def __len__(self):
         return len(self.dataset)
@@ -548,6 +550,8 @@ class SAMDataset(TorchDataset):
     def __getitem__(self, idx):
         item = self.dataset[idx]
         image = np.array(item["image"])
+        if self.config["pseudo_coloring"] == "Bone":
+            image = cv2.applyColorMap(image[:, :, 0], cv2.COLORMAP_BONE)
         ground_truth_mask = np.array(item["label"])
         # get bounding box prompt
         bboxes, gt_masks, mask_values, mask_counts = self.get_bboxes_and_gt_masks(ground_truth_mask)
