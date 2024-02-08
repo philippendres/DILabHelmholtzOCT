@@ -17,6 +17,8 @@ import torch.nn.functional as F
 #from torch_topological.nn import VietorisRipsComplex
 import copy
 import evaluate
+import sklearn
+NO_BEST_WORST_SAMPLES = 3
 
 def training(base_model, config):
     if config["topological"]:
@@ -89,6 +91,7 @@ def training(base_model, config):
     evaluate_metrics(model, mask_decoders, valid_dataset, config, processor)
     wandb.finish()
 
+"""
 def evaluate_metrics(model, mask_decoders, dataset, config, processor):
     metric = evaluate.load("mean_iou")
     segmentations = []
@@ -119,6 +122,194 @@ def evaluate_metrics(model, mask_decoders, dataset, config, processor):
         reduce_labels=False,
     )
     print(metric)
+"""
+def evaluate_metrics(model, mask_decoders, dataset, config, processor):
+    model.eval()
+    metric_iou = evaluate.load("mean_iou")
+    segmentations = []
+    segmentations_probas = []
+    ground_truths = []
+    indexes = []
+    category_accuracies = np.zeros(14)
+    category_ious = np.zeros(14)
+    category_f1 = np.zeros(14)
+    category_dice = np.zeros(14)
+    category_spec = np.zeros(14)
+    category_sens = np.zeros(14)
+    category_map = np.zeros(14)
+    category_sample_accuracies = np.zeros(14)
+    category_sample_ious = np.zeros(14)
+    category_sample_f1 = np.zeros(14)
+    category_sample_dice = np.zeros(14)
+    category_sample_spec = np.zeros(14)
+    category_sample_sens = np.zeros(14)
+    category_sample_map = np.zeros(14)
+    for i in range(14):
+        segmentations.append([])
+        ground_truths.append([])
+        segmentations_probas.append([])
+        indexes.append([])
+    for i in tqdm(range(len(dataset))):
+        image, bboxes, gt_masks, mask_values, mask_counts = dataset[i]
+        gt_masks = torch.tensor(np.array(gt_masks))
+        class_labels = config["mask_dict"]
+        with torch.no_grad():
+            inputs = processor(image, input_boxes=[[[0,0,496,512]]], return_tensors="pt")
+            outputs=custom_forward(model, mask_decoders, **inputs.to("cuda"), multimask_output=False)
+            #outputs = model(**inputs.to(device), multimask_output=False)
+            masks = torch.zeros(1, 14, 496, 512)
+            for i in range(config["nr_of_decoders"]):
+                #masks = F.interpolate(outputs.pred_masks[:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
+                masks_i = F.interpolate(outputs[1][i][:,:,0,:,:], (1024,1024), mode="bilinear", align_corners=False)
+                masks_i = masks_i[..., : 992, : 1024]
+                masks[:,i,:,:] = F.interpolate(masks_i, (496,512), mode="bilinear", align_corners=False)    
+            masks_compact = torch.argmax(masks, dim=1).squeeze()
+            gt_masks = torch.argmax(gt_masks, dim=0)
+        values = torch.unique(gt_masks)
+        soft_masks = torch.softmax(masks,1)
+        for v in values:
+            binary_mask = torch.where(masks_compact==v, 1.0, 0.0)
+            binary_gt_masks = torch.where(gt_masks==v, 1.0, 0.0)
+            segmentations[v].append(binary_mask)
+            segmentations_probas[v].append(soft_masks[0,v,:,:])
+            ground_truths[v].append(binary_gt_masks)
+            indexes[v].append(i)
+        
+    for i in range(14):
+        print(f"------------------CLASS: {config['mask_dict'][i]}----------------------")
+        metric_output = metric_iou.compute(
+            predictions=segmentations[i],
+            references=ground_truths[i],
+            ignore_index=255,
+            num_labels=2,
+            reduce_labels=False,
+        )
+        category_accuracies[i] = metric_output['per_category_accuracy'][1]
+        category_ious[i] = metric_output['per_category_iou'][1]
+        flat_gt = np.array(ground_truths[i]).reshape(-1)
+        flat_seg = np.array(segmentations[i]).reshape(-1)
+        flat_segp = np.array(segmentations_probas[i]).reshape(-1)
+        
+        category_f1[i] = sklearn.metrics.f1_score(flat_gt, flat_seg)
+        category_map[i] = sklearn.metrics.average_precision_score(flat_gt, flat_segp)
+        tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+        category_sens[i] = tp / (tp + fn) if (tp + fn) != 0 else 0.0
+        category_spec[i] = tn / (tn + fp) if (tn + fp) != 0 else 0.0
+        category_dice[i] = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0
+        
+        sample_iou = []
+        sample_accuracy = []
+        sample_spec = []
+        sample_sens = []
+        sample_f1 = []
+        sample_dice = []
+        sample_ap = []
+        
+        for j in range(len(segmentations[i])):
+            metric_output_tmp = metric_iou.compute(
+                predictions=[segmentations[i][j]],
+                references=[ground_truths[i][j]],
+                ignore_index=255,
+                num_labels=2,
+                reduce_labels=False,
+            )
+            flat_gt = np.array(ground_truths[i][j]).reshape(-1)
+            flat_seg = np.array(segmentations[i][j]).reshape(-1)
+            flat_segp = np.array(segmentations_probas[i][j]).reshape(-1)
+            tn, fp, fn, tp = sklearn.metrics.confusion_matrix(flat_gt, flat_seg).ravel()
+            sample_iou.append(metric_output_tmp['per_category_iou'][1])
+            sample_accuracy.append(metric_output_tmp['per_category_accuracy'][1])
+            sample_spec.append(tn / (tn + fp) if (tn + fp) != 0 else 0.0)
+            sample_sens.append(tp / (tp + fn) if (tp + fn) != 0 else 0.0)
+            sample_f1.append(sklearn.metrics.f1_score(flat_gt, flat_seg))
+            sample_dice.append(2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) != 0 else 0.0)
+            sample_ap.append(sklearn.metrics.average_precision_score(flat_gt, flat_segp))
+            
+        category_sample_accuracies[i] = np.mean(sample_accuracy)
+        category_sample_dice[i] = np.mean(sample_dice)
+        category_sample_ious[i] = np.mean(sample_iou)
+        category_sample_f1[i] = np.mean(sample_f1)
+        category_sample_sens[i] = np.mean(sample_sens)
+        category_sample_spec[i] = np.mean(sample_spec)
+        category_sample_map[i] = np.mean(sample_ap)
+        
+        avg_start_idx = len(sample_iou) // 2 - NO_BEST_WORST_SAMPLES // 2
+        avg_end_idx = len(sample_iou) // 2 + NO_BEST_WORST_SAMPLES // 2
+        idx = np.array(indexes[i])
+        
+        print(f"GENERAL REPORT:")
+        print(metric_output)
+        print(f"----IoU----:")
+        print(f"{category_ious[i]} \ {category_sample_ious[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_iou)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_iou)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_iou)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Accuracy----:")
+        print(f"{category_accuracies[i]} \ {category_sample_accuracies[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_accuracy)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_accuracy)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_accuracy)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Specificity----:")
+        print(f"{category_spec[i]} \ {category_sample_spec[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_spec)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_spec)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_spec)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Sensitivity----:")
+        print(f"{category_sens[i]} \ {category_sample_sens[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_sens)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_sens)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_sens)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----F1----:")
+        print(f"{category_f1[i]} \ {category_sample_f1[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_f1)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_f1)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_f1)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----Dice----:")
+        print(f"{category_dice[i]} \ {category_sample_dice[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_dice)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_dice)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_dice)[:NO_BEST_WORST_SAMPLES]]}")
+        print(f"----AP----:")
+        print(f"{category_map[i]} \ {category_sample_map[i]}")
+        print(f"Best samples: {idx[np.argsort(sample_ap)[-NO_BEST_WORST_SAMPLES:]]}")
+        print(f"Average samples: {idx[np.argsort(sample_ap)[avg_start_idx:avg_end_idx]]}")
+        print(f"Worst samples: {idx[np.argsort(sample_ap)[:NO_BEST_WORST_SAMPLES]]}")
+        
+    print(f"----------GLOBAL----------")
+    print("Category_accuracies:" + str(list(category_accuracies))+"\n"+"Category_ious:"+str(list(category_ious)))
+    print(f"Category_specificity: {category_spec}")
+    print(f"Category_sensitivity: {category_sens}")
+    print(f"Category_dice: {category_dice}")
+    print(f"Category_ap: {category_map}")
+    mean_iou = np.mean(category_ious)
+    mean_accuracy = np.mean(category_accuracies)
+    mean_spec = np.mean(category_spec)
+    mean_sens = np.mean(category_sens)
+    mean_dice = np.mean(category_dice)
+    mean_map = np.mean(category_map)
+    print("Mean_accuracy:" + str(mean_accuracy)+"\n"+"Mean_iou:"+str(mean_iou))
+    print(f"Mean specificity: {mean_spec}")
+    print(f"Mean sensitivity: {mean_sens}")
+    print(f"Mean dice: {mean_dice}")
+    print(f"Mean mAP: {mean_map}")
+    
+    print(f"----------SAMPLE----------")
+    print("Category_accuracies:" + str(list(category_sample_accuracies))+"\n"+"Category_ious:"+str(list(category_sample_ious)))
+    print(f"Category_specificity: {category_sample_spec}")
+    print(f"Category_sensitivity: {category_sample_sens}")
+    print(f"Category_dice: {category_sample_dice}")
+    print(f"Category_ap: {category_sample_map}")
+    mean_iou = np.mean(category_sample_ious)
+    mean_accuracy = np.mean(category_sample_accuracies)
+    mean_spec = np.mean(category_sample_spec)
+    mean_sens = np.mean(category_sample_sens)
+    mean_dice = np.mean(category_sample_dice)
+    mean_map = np.mean(category_sample_map)
+    print("Mean_accuracy:" + str(mean_accuracy)+"\n"+"Mean_iou:"+str(mean_iou))
+    print(f"Mean specificity: {mean_spec}")
+    print(f"Mean sensitivity: {mean_sens}")
+    print(f"Mean dice: {mean_dice}")
+    print(f"Mean mAP: {mean_map}")
 
 def prepare_model(base_model):
     processor = SamProcessor.from_pretrained(base_model)
@@ -252,7 +443,7 @@ def custom_forward(model, mask_decoders,
 def prepare_data(processor, dataset, split, config):
     dataset = datasets.load_from_disk(dataset)[split]
     config["data_transforms"] and dataset.set_transform(data_transforms(operations=config["data_transforms"]))
-    dataset = SAMDataset(dataset=dataset, processor=processor)
+    dataset = SAMDataset(dataset=dataset)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=config["shuffle"], collate_fn=custom_collate)
     return dataset, dataloader
 
@@ -298,11 +489,11 @@ def display_samples(model, mask_decoders, processor, device, dataset, split, con
                 masks=image_masks,
             ))
         
-        wandb.log({split+"_samples" :img})
+    wandb.log({split+"_samples" :img})
     model.train()
 
 def select_display_indices(dataset, config):
-    return [1]
+    return [0,1,3]
 
 def validate_model(model, mask_decoders, processor, valid_dl, seg_loss, config, log_images=False, batch_idx=0):
     "Compute performance of the model on the validation dataset and log a wandb.Table"
@@ -336,9 +527,8 @@ def validate_model(model, mask_decoders, processor, valid_dl, seg_loss, config, 
     return epoch_loss
 
 class SAMDataset(TorchDataset):
-    def __init__(self, dataset, processor):
+    def __init__(self, dataset):
         self.dataset = dataset
-        self.processor = processor
 
     def __len__(self):
         return len(self.dataset)
