@@ -86,7 +86,7 @@ parser.add_argument("--display_name", type=str, default="")
 
 parser.add_argument("--evaluate", type=bool, default=True)
 
-parser.add_argument("--prompt", type=str, default="points")
+parser.add_argument("--prompt", type=str, default="bboxes")
 
 parser.add_argument('--top', action='store_true')
 
