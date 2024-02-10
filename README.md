@@ -1,6 +1,6 @@
 # DILabHelmholtzOCT
 In this project we build a topology regularized foundation model for medical image segmentation.
-For this we fine-tune the Segment Anything Model [(SAM)](https://arxiv.org/abs/2304.02643) on a private OCT dataset.
+For this we fine-tune the Segment Anything Model ([SAM](https://arxiv.org/abs/2304.02643)) on a private OCT dataset.
 
 ## Introduction
 
@@ -14,18 +14,18 @@ We think this feature could be very interesting in the medical domain. Here expe
 Recent papers started to fine-tune SAM on specific domains. In the medical domain Ma et al. and Zhang et al. presented fine-tuned SAM models: [MedSAM](https://arxiv.org/abs/2304.12306) and [SAMed](https://arxiv.org/abs/2304.13785). Ma et al. propose to re-train the mask decoder, since it is commparatively small and therefore allows fast training. Zhang et al. propose to use low-rank-based finetuning techniques to the image encoder. We mostly follow the ideas of Ma et al..
 
 ## Dataset
-Our dataset is private and consists of 552 images. Each image comes with a corresponding ground truth segmentation which consists of 14 segmentation classes. A raw image with corresponding ground truth segmentation can be seen in figure UPLOAD IMAGES.
+Our dataset is private and consists of 552 images. Each image comes with a corresponding ground truth segmentation which consists of 14 segmentation classes.
 
 ![OCTImage](https://github.com/philippendres/DILabHelmholtzOCT/tree/main/images/OCTImage.png)
 
 ## Installation
 ### Install required libararies
-We recommend to set up a conda environment with all the required packages from 'environment.yml'
+We recommend to set up a conda environment with all the required packages from `environment.yml`
 ### Clone Code
-Use 'git clone https://github.com/philippendres/DILabHelmholtzOCT.git'
+Use `git clone https://github.com/philippendres/DILabHelmholtzOCT.git`
 ## Directory Setup
 The structure of our datasets folder is as follows:
-'''
+```
     data_directory
     |---raw
     |   |---custom
@@ -38,30 +38,30 @@ The structure of our datasets folder is as follows:
     |---processed
         |---custom
             |---dataset_name
-'''
-The structure of our model checkpoints is as follows:
-'''
+```
+The structure of our model checkpoints folder is as follows:
+```
     model_directory
     |---custom
         |---display_name
-'''
+```
 
 ## Model Training and Evaluation
-For fine-tuning SAM we largely follow the idea of MedSAM ADD REFERENCE. 
-We first preprocess the dataset via octsam/data/preprocessing. 
-'''
+For fine-tuning SAM we largely follow the idea of [MedSAM](https://arxiv.org/abs/2304.12306).  
+We first preprocess the dataset via
+```
     python octsam/data/preprocessing.py --data_directory=ChooseDirectory --dataset
-'''
-The dataset_name is created automatically according to the current timestamp in the format 'YY-MM-DD_HH.mm.ss'.
-Then we retrain SAM's mask decoder. For logging we use [Weights and Biases](https://wandb.ai/site). For logging project_name, entity and display_name need to be specified
-'''
+```
+The dataset_name is created automatically according to the current timestamp in the format `YY-MM-DD_HH.mm.ss`.
+Then we retrain SAM's mask decoder. For logging we use [Weights and Biases](https://wandb.ai/site). Therefore `project_name`, `entity` and `display_name` need to be specified.
+```
     python octsam/models/training.py --project_name=ChooseName --entity=ChooseEntity --display_name=ChooseName --datset_name=ChooseProcessedDatasetName
-'''
+```
 Here we give multiple options to configure training paramters via command line arguments. The most important options are:
-- image encoder size: default: '--base_model=facebook/sam-vit-base', alternative: '--base_model=facebook/sam-vit-large'
-- pseudocoloring: default: '--pseudocolor=grayscale', alternative: '--pseudocolor=Bone'
-- topological loss: default: '--top=True', alternative: '--top=False'
-- prompt choice: default: '--prompt=bboxes', alternative: '--prompt=points'
+- image encoder size: default: `--base_model=facebook/sam-vit-base`, alternative: `--base_model=facebook/sam-vit-large`
+- pseudocoloring: default: `--pseudocolor=grayscale`, alternative: `--pseudocolor=Bone`
+- topological loss: default: `--top=True`, alternative: `--top=False`
+- prompt choice: default: `--prompt=bboxes`, alternative: `--prompt=points`
 
 After training the final model is saved to the specified model directory and the evaluation results on the test set are printed in the terminal.
 
