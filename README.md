@@ -16,7 +16,7 @@ Recent papers started to fine-tune SAM on specific domains. In the medical domai
 ## Dataset
 Our dataset is private and consists of 552 images. Each image comes with a corresponding ground truth segmentation which consists of 14 segmentation classes.
 
-![OCTImage](https://github.com/philippendres/DILabHelmholtzOCT/tree/main/images/OCTImage.png)
+![OCTImage](https://github.com/philippendres/DILabHelmholtzOCT/tree/main/images/OCTImage.png?raw=true)
 
 ## Installation
 ### Install required libararies
