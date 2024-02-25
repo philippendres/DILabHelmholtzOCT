@@ -54,7 +54,7 @@ def evaluate_metrics(model, dataset, config, processor):
         ground_truths.append([])
         segmentations_probas.append([])
         indexes.append([])
-    for i in tqdm(range(15)):
+    for i in tqdm(range(len(dataset))):
         with torch.no_grad():
             if (config["prompt_type"]=="points"):
                 image, points, gt_masks, mask_values = dataset[i]
