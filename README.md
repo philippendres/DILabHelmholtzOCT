@@ -1,6 +1,6 @@
 # DILabHelmholtzOCT
 In this project we build a topology regularized foundation model for medical image segmentation.
-For this we fine-tune the Segment Anything Model ([SAM](https://arxiv.org/abs/2304.02643)) on a private OCT dataset.
+For this we fine-tune the Segment Anything Model ([SAM](https://arxiv.org/abs/2304.02643)) on a private OCT dataset. The project is part of the [Data Innovation Lab](https://www.mdsi.tum.de/di-lab/vergangene-projekte/ws23-tum-helmholtz-topology-regularised-foundation-model-for-medical-image-segmentation/). 
 
 ## Introduction
 
@@ -72,4 +72,4 @@ After training the final model is saved to the specified model directory and the
 We implemented an interactive application in which you can use our fine-tuned model to segment OCT data. It is located at `octsam/inference`. You can run the application in the notebook or directly in the python file. We also offer an application for segmenting organoid images which uses the fine-tuned model implemented in our sister project ![DILabHelmholtzOrganoid](https://github.com/enricrabasseda/DILabHelmholtzOrganoid)
 
 ## Model Checkpoint
-We will upload a trained model_checkpoint.
+A model checkpoint is uploaded on [Google Drive](https://drive.google.com/file/d/1s7LIBM8o1n31YWVNIKdyLsylzR2jhCzj/view?usp=sharing)
