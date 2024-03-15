@@ -16,32 +16,35 @@ Recent papers started to fine-tune SAM on specific domains. In the medical domai
 ## Dataset
 Our dataset is private and consists of 552 images. Each image comes with a corresponding ground truth segmentation which consists of 14 segmentation classes.
 
-![OCTImage](https://github.com/philippendres/DILabHelmholtzOCT/tree/main/images/OCTImage.png?raw=true)
+![OCTImage](./images/OCTImage.png?raw=true)
 
 ## Installation
 ### Install required libararies
-We recommend to set up a conda environment with all the required packages from `environment.yml`
+We recommend to set up a conda environment with all the required packages from `environment.yml`:
+```
+conda env create --prefix ./env --file environment.yml
+conda activate ./env
+```
+
 ### Clone Code
 Use `git clone https://github.com/philippendres/DILabHelmholtzOCT.git`
 ## Directory Setup
-The structure of our datasets folder is as follows:
+The data_directory needs to be set up according to the following file structure to use our training pipeline:
 ```
-    data_directory
-    |---raw
-    |   |---custom
-    |      |---imagesgreyscale
-    |      |   |--xyy.png
-    |      |   |--xyz.png
-    |      |---masks14
-    |      |   |--xyy.png
-    |      |   |--xyz.png
-    |---processed
-        |---custom
-            |---dataset_name
-```
-The structure of our model checkpoints folder is as follows:
-```
-    model_directory
+data_directory
+|---datasets
+|   |---raw
+|   |   |---custom
+|   |      |---imagesgreyscale
+|   |      |   |--xyy.png
+|   |      |   |--xyz.png
+|   |      |---masks14
+|   |      |   |--xyy.png
+|   |      |   |--xyz.png
+|   |---processed
+|        |---custom
+|           |---dataset_name
+|---models
     |---custom
         |---display_name
 ```
@@ -50,12 +53,12 @@ The structure of our model checkpoints folder is as follows:
 For fine-tuning SAM we largely follow the idea of [MedSAM](https://arxiv.org/abs/2304.12306).  
 We first preprocess the dataset via
 ```
-    python octsam/data/preprocessing.py --data_directory=ChooseDirectory --dataset
+python octsam/data/preprocessing.py --data_directory=<ChooseDirectory> 
 ```
 The dataset_name is created automatically according to the current timestamp in the format `YY-MM-DD_HH.mm.ss`.
 Then we retrain SAM's mask decoder. For logging we use [Weights and Biases](https://wandb.ai/site). Therefore `project_name`, `entity` and `display_name` need to be specified.
 ```
-    python octsam/models/training.py --project_name=ChooseName --entity=ChooseEntity --display_name=ChooseName --datset_name=ChooseProcessedDatasetName
+python octsam/models/training.py --project_name=<ChooseName> --entity=<ChooseEntity> --display_name=<ChooseName> --data_directory=<ChooseDirectory> --dataset_name=<ChooseProcessedDatasetName>
 ```
 Here we give multiple options to configure training paramters via command line arguments. The most important options are:
 - image encoder size: default: `--base_model=facebook/sam-vit-base`, alternative: `--base_model=facebook/sam-vit-large`
@@ -66,7 +69,7 @@ Here we give multiple options to configure training paramters via command line a
 After training the final model is saved to the specified model directory and the evaluation results on the test set are printed in the terminal.
 
 ## Inference
-We working on an interactive application of our model using [gradio](https://www.gradio.app/).
+We are working on an interactive application of our model using [gradio](https://www.gradio.app/).
 
 ## Model Checkpoint
 We will upload a trained model_checkpoint.
