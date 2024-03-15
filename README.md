@@ -69,7 +69,7 @@ Here we give multiple options to configure training paramters via command line a
 After training the final model is saved to the specified model directory and the evaluation results on the test set are printed in the terminal.
 
 ## Inference
-We are working on an interactive application of our model using [gradio](https://www.gradio.app/).
+We implemented an interactive application in which you can use our fine-tuned model to segment OCT data. It is located at `octsam/inference`. You can run the application in the notebook or directly in the python file. We also offer an application for segmenting organoid images which uses the fine-tuned model implemented in our sister project ![DILabHelmholtzOrganoid](https://github.com/enricrabasseda/DILabHelmholtzOrganoid)
 
 ## Model Checkpoint
 We will upload a trained model_checkpoint.

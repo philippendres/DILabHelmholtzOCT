@@ -74,7 +74,7 @@ def training(base_model, config):
         print(f'EPOCH: {epoch}, Train Loss: {train_epoch_loss}, Valid Loss: {valid_epoch_loss}')
         config["display_mode"] != "none" and display_samples(model, processor, device, train_dataset, "train", config)
         config["display_mode"] != "none" and display_samples(model, processor, device, valid_dataset, "test", config)
-    torch.save(model.state_dict(), config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt")
+    torch.save(model.state_dict(), config["checkpoint"] +"/"+ config["display_name"] + "_" + config["time"] +".pt")    
     if config["evaluate"]:
         evaluate_metrics(model, valid_dataset, config, processor)
     wandb.finish()
@@ -82,7 +82,7 @@ def training(base_model, config):
 def evaluate_metrics(model, dataset, config, processor):
     processor = SamProcessor.from_pretrained(config["base_model"])
     model = SamModel.from_pretrained(config["base_model"])
-    model.load_state_dict(torch.load(config["checkpoint"] + config["display_name"] + "_" + config["time"] +".pt"))
+    model.load_state_dict(torch.load(config["checkpoint"] +"/"+ config["display_name"] + "_" + config["time"] +".pt"))    
     dataset = datasets.load_from_disk(config["dataset"])["test"]
     dataset = SAMDataset(dataset=dataset, config=config)
     model.eval()
@@ -399,7 +399,7 @@ class SAMDataset(TorchDataset):
             labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
             for c in range(ncomponents):
                 final_mask_values.append(v)
-                x_indices, y_indices = np.where(labeled_gt_mask== c+1)
+                y_indices, x_indices = np.where(labeled_gt_mask== c+1)
                 x_min, x_max = np.min(x_indices), np.max(x_indices)
                 y_min, y_max = np.min(y_indices), np.max(y_indices)
                 # add perturbation to bounding box coordinates
@@ -426,7 +426,7 @@ class SAMDataset(TorchDataset):
             labeled_gt_mask, ncomponents = label(binary_gt_mask, structure)
             for c in range(ncomponents):
                 final_mask_values.append(v)
-                x_indices, y_indices = np.where(labeled_gt_mask== c+1)
+                y_indices, x_indices = np.where(labeled_gt_mask== c+1)
                 rand_idx = random.randrange(0, len(x_indices))
                 points.append([[x_indices[rand_idx], y_indices[rand_idx]]])
                 gt_mask = np.where(labeled_gt_mask== c+1, 1.0, 0.0)

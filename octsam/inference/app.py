@@ -1,5 +1,5 @@
-#run this file and follow the link to see the interactive application
-#backend
+# Change the checkpoint path, run this file and follow the link to see the interactive application
+# backend
 import torch
 from transformers import SamModel, SamProcessor
 import torch.nn.functional as F
@@ -10,6 +10,7 @@ import numpy as np
 device = "cuda" if torch.cuda.is_available() else "cpu"
 processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
 model = SamModel.from_pretrained("facebook/sam-vit-base").to(device)
+# Change the checkpoint path
 checkpoint_path = "/vol/data/models/custom5e-05 lr,1e-04 wd,2 bs, diceCE loss, grayscale, 24-02-23_17.35.30_24-02-23_17.35.30"
 model.load_state_dict(torch.load(checkpoint_path +".pt"))
 
